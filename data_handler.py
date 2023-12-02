@@ -150,7 +150,7 @@ class CandleCreator:
                             _data = self._extract_feed_v4(_e_feed)
                             self._ltp_queue.put(_data)
                             self._update_shared_xref(_e_feed)
-                        logger.info(self.shared_xref.copy())
+                        # logger.info(self.shared_xref.copy())
                 else:
                     sleep(0.07)
 

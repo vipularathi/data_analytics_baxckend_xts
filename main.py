@@ -3,6 +3,7 @@ from concurrent.futures import ProcessPoolExecutor
 from multiprocessing import get_context, Manager, Pipe
 from time import sleep
 
+from analysis import start_analysis
 from common import logger
 from contracts import get_instruments
 from feed import connect_socket
@@ -19,7 +20,7 @@ def get_req_contracts():
     req = nse_ins[eq_filter | der_filter].copy()
     tokens = req['instrument_token'].tolist()
     token_xref = req[['instrument_token', 'tradingsymbol']].set_index('instrument_token').to_dict()['tradingsymbol']
-    return tokens, token_xref
+    return req, tokens, token_xref
 
 
 def main():
@@ -27,7 +28,7 @@ def main():
     logger.info(f'Max workers: {workers}. Main Pid: {os.getpid()}')
     with ProcessPoolExecutor(max_workers=workers, mp_context=get_context('spawn')) as executor:
         client = initiate_session()
-        tokens, token_xref = get_req_contracts()
+        ins_df, tokens, token_xref = get_req_contracts()
         logger.info(f'Entities for broadcast: {len(tokens)}')
 
         mp = Manager()
@@ -39,10 +40,9 @@ def main():
         # Initialize Pipe Objects
         candle_receiver, candle_send = Pipe(duplex=False)
 
-        # # Initiate Candle Data Processor
-        # names = [socket_name(_i) for _i in tokens_map.keys()]
-        # # noinspection PyTypeChecker
-        # data_processor = executor.submit(start_analysis, candle_receiver, tokens_map, xrefs, shared_xref=latest_feed_xref, names=names)  # NOSONAR
+        # Initiate Candle Data Processor
+        # noinspection PyTypeChecker
+        data_processor = executor.submit(start_analysis, ins_df, tokens, token_xref, shared_xref=latest_feed_xref)  # NOSONAR
 
         # Initialize Broadcast
         # noinspection PyTypeChecker
