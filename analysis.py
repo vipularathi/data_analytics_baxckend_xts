@@ -81,6 +81,7 @@ class SnapAnalysis:
     def opt_calc(self, snap, dt):
         opt_df = self.opt_df.copy()
         opt_df['ltp'] = opt_df['symbol'].apply(self.get_ltp, args=(snap,))
+        opt_df['oi'] = opt_df['symbol'].apply(self.get_oi, args=(snap,))
         opt_df['spot'] = opt_df['underlying'].apply(self.get_ltp, args=(snap,))
         greeks = opt_df.apply(
             lambda x: pd.Series(get_greeks_intraday(x['spot'], x['strike'], x['expiry'], x['opt'], x['ltp'], dt)),
@@ -105,10 +106,11 @@ class SnapAnalysis:
         oc_df['minima'] = oc_df['combined_premium'] == min_combined
 
         req_cols = ['timestamp', 'underlying', 'expiry', 'strike', 'symbol_c', 'symbol_p', 'spot_c', 'ltp_c', 'ltp_p',
-                    'iv_c', 'iv_p', 'combined_premium', 'combined_iv', 'minima']
+                    'oi_c', 'oi_p', 'iv_c', 'iv_p', 'combined_premium', 'combined_iv', 'minima']
         req_straddle_df = oc_df[req_cols].copy()
-        req_straddle_df.rename(columns={'symbol_c': 'call', 'symbol_p': 'put', 'spot_c': 'spot', 'ltp_c': 'call_price',
-                                        'ltp_p': 'put_price', 'iv_c': 'call_iv', 'iv_p': 'put_iv'}, inplace=True)
+        cols_renames = {'symbol_c': 'call', 'symbol_p': 'put', 'spot_c': 'spot', 'ltp_c': 'call_price',
+                        'ltp_p': 'put_price', 'oi_c': 'call_oi', 'oi_p': 'put_oi', 'iv_c': 'call_iv', 'iv_p': 'put_iv'}
+        req_straddle_df.rename(columns=cols_renames, inplace=True)
         # insert req_straddle_df
         DBHandler.insert_opt_straddle(req_straddle_df.replace({np.NAN: None}).to_dict('records'))
         return req_straddle_df
@@ -116,6 +118,10 @@ class SnapAnalysis:
     @staticmethod
     def get_ltp(symbol: str, xref: dict):
         return xref.get(symbol, {}).get('last_price', None)
+
+    @staticmethod
+    def get_oi(symbol: str, xref: dict):
+        return xref.get(symbol, {}).get('oi', None)
 
 
 def start_analysis(ins_df, tokens, token_xref, shared_xref):
