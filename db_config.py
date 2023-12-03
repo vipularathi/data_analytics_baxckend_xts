@@ -2,7 +2,7 @@ from datetime import datetime
 
 import sqlalchemy as sql
 from sqlalchemy import MetaData, Table, Column, Integer, DateTime, DECIMAL, VARCHAR, TEXT, Index, UniqueConstraint, \
-    func, BOOLEAN, create_engine, Date, ForeignKey, Enum, Time
+    func, BOOLEAN, create_engine, Date, ForeignKey, Enum, Time, Float
 from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP
 
 from common import today
@@ -38,6 +38,47 @@ s_tbl_snap = Table(
     Column('updated_at', TIMESTAMP(True), server_default=func.current_timestamp()),
 )
 
+n_tbl_opt_greeks = 'opt_greeks'
+s_tbl_opt_greeks = Table(
+    n_tbl_opt_greeks, metadata,
+    Column('id', Integer, primary_key=True, autoincrement=True),
+    Column('timestamp', TIMESTAMP(True), nullable=False),
+    Column('symbol', VARCHAR(50), nullable=False),
+    Column('underlying', VARCHAR(50), nullable=False),
+    Column('expiry', Date, nullable=False),
+    Column('strike', Float, nullable=False),
+    Column('opt', VARCHAR(20), nullable=False),
+    Column('ltp', Float),
+    Column('spot', Float),
+    Column('iv', Float),
+    Column('delta', Float),
+    Column('theta', Float),
+    Column('gamma', Float),
+    Column('vega', Float),
+    Column('rho', Float),
+    UniqueConstraint('timestamp', 'symbol', 'underlying', 'expiry', 'strike', name=f'uq_{n_tbl_opt_greeks}_record')
+)
+
+n_tbl_opt_straddle = 'opt_straddle'
+s_tbl_opt_straddle = Table(
+    n_tbl_opt_straddle, metadata,
+    Column('id', Integer, primary_key=True, autoincrement=True),
+    Column('timestamp', TIMESTAMP(True), nullable=False),
+    Column('underlying', VARCHAR(50), nullable=False),
+    Column('expiry', Date, nullable=False),
+    Column('strike', Float, nullable=False),
+    Column('call', VARCHAR(50), nullable=False),
+    Column('put', VARCHAR(50), nullable=False),
+    Column('spot', Float),
+    Column('call_price', Float),
+    Column('put_price', Float),
+    Column('call_iv', Float),
+    Column('put_iv', Float),
+    Column('combined_premium', Float),
+    Column('combined_iv', Float),
+    Column('minima', BOOLEAN),
+    UniqueConstraint('timestamp', 'underlying', 'expiry', 'strike', name=f'uq_{n_tbl_opt_straddle}_record')
+)
 
 # Last and after all table declarations
 # noinspection PyUnboundLocalVariable

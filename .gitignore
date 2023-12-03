@@ -2,3 +2,4 @@
 .vscode
 entity_data
 logs
+test*.py

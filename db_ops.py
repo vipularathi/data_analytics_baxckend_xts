@@ -7,7 +7,7 @@ import sqlalchemy.exc as sql_exec
 import pandas as pd
 
 from common import logger
-from db_config import engine_str, use_sqlite, s_tbl_snap
+from db_config import engine_str, use_sqlite, s_tbl_snap, n_tbl_snap, s_tbl_opt_greeks, s_tbl_opt_straddle
 
 execute_retry = True
 pool = sql.create_engine(engine_str, pool_size=10, max_overflow=5, pool_recycle=67, pool_timeout=30, echo=None)
@@ -123,3 +123,20 @@ class DBHandler:
     @classmethod
     def insert_snap_data(cls, db_data: list[dict]):
         insert_data(s_tbl_snap, db_data)
+
+    @classmethod
+    def get_snap_data(cls, ts: datetime):
+        query = f"""
+            SELECT * FROM {n_tbl_snap} WHERE "timestamp"='{ts}'
+        """
+        result = execute_query(query, params={'ts': ts})
+        response = result.fetchall()
+        return response
+
+    @classmethod
+    def insert_opt_greeks(cls, db_data: list[dict]):
+        insert_data(s_tbl_opt_greeks, db_data, ignore=True)
+
+    @classmethod
+    def insert_opt_straddle(cls, db_data: list[dict]):
+        insert_data(s_tbl_opt_straddle, db_data, ignore=True)

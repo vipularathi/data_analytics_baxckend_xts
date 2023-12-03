@@ -3,6 +3,8 @@ import traceback
 from datetime import datetime
 from time import sleep
 
+import numpy as np
+import pandas as pd
 import pytz
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
@@ -10,7 +12,9 @@ from colorama import Style, Fore
 from dateutil.relativedelta import relativedelta
 
 from common import logger, today
+from contracts import get_req_contracts
 from db_ops import DBHandler
+from greeks import get_greeks_intraday
 
 
 class SnapAnalysis:
@@ -22,9 +26,19 @@ class SnapAnalysis:
         self.token_xref = token_xref
         self.shared_xref = shared_xref
 
+        self.opt_df = None
+        self.prepare_meta()
+
         self.scheduler = None
         self.scheduler: BackgroundScheduler = self.init_scheduler()
         self.scheduler.start()  # Scheduler starts
+
+    def prepare_meta(self):
+        req_df, token, token_xref = get_req_contracts()
+        meta_df = req_df[req_df['segment'] == 'NFO-OPT'].copy()
+        renames = {'tradingsymbol': 'symbol', 'name': 'underlying', 'instrument_type': 'opt'}
+        opt_df = meta_df[['tradingsymbol', 'name', 'expiry', 'strike', 'instrument_type']].copy().rename(columns=renames)
+        self.opt_df = opt_df
 
     def init_scheduler(self):
         if self.scheduler is not None:
@@ -54,11 +68,54 @@ class SnapAnalysis:
                                name=f'SnapDataAnalysis')
 
     def run_analysis(self):
-        dt = datetime.now(tz=pytz.timezone('Asia/Kolkata'))
+        dt = datetime.now(tz=pytz.timezone('Asia/Kolkata')).replace(microsecond=0)
         xref = self.shared_xref.copy()
         logger.info(list(xref.keys()))
         data = {'timestamp': dt.isoformat(), 'snap': xref}
-        DBHandler.insert_snap_data([json.loads(json.dumps(data, default=str))])
+        db_data = json.loads(json.dumps(data, default=str))
+        DBHandler.insert_snap_data([db_data])
+
+        greeks_df = self.opt_calc(snap=xref, dt=dt)
+        self.straddle_calc(greeks_df)
+
+    def opt_calc(self, snap, dt):
+        opt_df = self.opt_df.copy()
+        opt_df['ltp'] = opt_df['symbol'].apply(self.get_ltp, args=(snap,))
+        opt_df['spot'] = opt_df['underlying'].apply(self.get_ltp, args=(snap,))
+        greeks = opt_df.apply(
+            lambda x: pd.Series(get_greeks_intraday(x['spot'], x['strike'], x['expiry'], x['opt'], x['ltp'], dt)),
+            axis=1)
+        df = opt_df.join(greeks)
+        df.insert(0, 'timestamp', dt)
+        DBHandler.insert_opt_greeks(df.replace({np.NAN: None}).to_dict('records'))
+        return df
+
+    @staticmethod
+    def straddle_calc(df):
+        call_df = df[(df['opt'] == 'CE')].copy()
+        put_df = df[(df['opt'] == 'PE')].copy()
+
+        # straddle values
+        oc_df = call_df.merge(put_df, on=['timestamp', 'underlying', 'expiry', 'strike'], how='outer', suffixes=('_c', '_p'))
+        oc_df.sort_values(['timestamp', 'underlying', 'expiry', 'strike'], inplace=True)
+        non_zero = (oc_df['ltp_c'] != 0) & (oc_df['ltp_p'] != 0)
+        oc_df.loc[non_zero, 'combined_premium'] = (oc_df['ltp_c'] + oc_df['ltp_p'])[non_zero]
+        oc_df.loc[non_zero, 'combined_iv'] = (oc_df[['iv_c', 'iv_p']].mean(axis=1))[non_zero]
+        min_combined = oc_df['combined_premium'].min()
+        oc_df['minima'] = oc_df['combined_premium'] == min_combined
+
+        req_cols = ['timestamp', 'underlying', 'expiry', 'strike', 'symbol_c', 'symbol_p', 'spot_c', 'ltp_c', 'ltp_p',
+                    'iv_c', 'iv_p', 'combined_premium', 'combined_iv', 'minima']
+        req_straddle_df = oc_df[req_cols].copy()
+        req_straddle_df.rename(columns={'symbol_c': 'call', 'symbol_p': 'put', 'spot_c': 'spot', 'ltp_c': 'call_price',
+                                        'ltp_p': 'put_price', 'iv_c': 'call_iv', 'iv_p': 'put_iv'}, inplace=True)
+        # insert req_straddle_df
+        DBHandler.insert_opt_straddle(req_straddle_df.replace({np.NAN: None}).to_dict('records'))
+        return req_straddle_df
+
+    @staticmethod
+    def get_ltp(symbol: str, xref: dict):
+        return xref.get(symbol, {}).get('last_price', None)
 
 
 def start_analysis(ins_df, tokens, token_xref, shared_xref):

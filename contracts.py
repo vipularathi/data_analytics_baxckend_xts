@@ -60,3 +60,15 @@ def get_instruments(force=False):
         instruments_df['lastUpdated'] = datetime.now()
         instruments_df.to_csv(instruments_path, index=False)
     return instruments_df
+
+
+def get_req_contracts():
+    scrips = ['NIFTY']
+    ins = get_instruments()
+    nse_ins = ins[ins['exchange'].isin(['NSE', 'NFO'])].copy()
+    eq_filter = nse_ins['tradingsymbol'].isin(scrips)
+    der_filter = (nse_ins['name'].isin(scrips)) & (nse_ins['expiry'] == '2023-12-07')
+    req = nse_ins[eq_filter | der_filter].copy()
+    tokens = req['instrument_token'].tolist()
+    token_xref = req[['instrument_token', 'tradingsymbol']].set_index('instrument_token').to_dict()['tradingsymbol']
+    return req, tokens, token_xref
