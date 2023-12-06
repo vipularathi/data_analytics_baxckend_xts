@@ -7,7 +7,7 @@ from analysis import start_analysis
 from common import logger
 from contracts import get_req_contracts
 from feed import connect_socket
-from service import socket_url, access_token, subscribe_index, user_id, login
+from xts_connect import socket_url, access_token, subscribe_index, user_id, login
 from zerodha import initiate_session, zws_wrapper
 
 

@@ -63,8 +63,11 @@ class SnapAnalysis:
         mkt_close = today + relativedelta(hour=15, minute=30)
 
         # Add jobs
+        trigger_pre = IntervalTrigger(minutes=1, start_date=mkt_open - relativedelta(minutes=5), end_date=mkt_open)
         trigger_snap = IntervalTrigger(minutes=1, start_date=mkt_open, end_date=mkt_close)
-        self.scheduler.add_job(self.run_analysis, trigger_snap, args=(), id='snap_1',
+        self.scheduler.add_job(self.run_analysis, trigger_pre, args=(), id='snap_1',
+                               name=f'SnapDataAnalysisPre')
+        self.scheduler.add_job(self.run_analysis, trigger_snap, args=(), id='snap_2',
                                name=f'SnapDataAnalysis')
 
     def run_analysis(self):

@@ -1,7 +1,7 @@
 import websocket
 
 from common import logger
-from service import subscribe_index
+from xts_connect import subscribe_index
 
 
 class Feed(websocket.WebSocketApp):
