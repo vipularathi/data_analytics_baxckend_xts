@@ -38,6 +38,7 @@ class SnapAnalysis:
         meta_df = req_df[req_df['segment'] == 'NFO-OPT'].copy()
         renames = {'tradingsymbol': 'symbol', 'name': 'underlying', 'instrument_type': 'opt'}
         opt_df = meta_df[['tradingsymbol', 'name', 'expiry', 'strike', 'instrument_type']].copy().rename(columns=renames)
+        opt_df['expiry'] = opt_df['expiry'].apply(lambda x: x + relativedelta(hour=15, minute=30))
         self.opt_df = opt_df
 
     def init_scheduler(self):
@@ -65,12 +66,12 @@ class SnapAnalysis:
         # Add jobs
         trigger_pre = IntervalTrigger(minutes=1, start_date=mkt_open - relativedelta(minutes=5), end_date=mkt_open)
         trigger_snap = IntervalTrigger(minutes=1, start_date=mkt_open, end_date=mkt_close)
-        self.scheduler.add_job(self.run_analysis, trigger_pre, args=(), id='snap_1',
+        self.scheduler.add_job(self.run_analysis, trigger_pre, kwargs=dict(calc=False), id='snap_1',
                                name=f'SnapDataAnalysisPre')
-        self.scheduler.add_job(self.run_analysis, trigger_snap, args=(), id='snap_2',
+        self.scheduler.add_job(self.run_analysis, trigger_snap, kwargs=dict(calc=True), id='snap_2',
                                name=f'SnapDataAnalysis')
 
-    def run_analysis(self):
+    def run_analysis(self, calc=True):
         dt = datetime.now(tz=pytz.timezone('Asia/Kolkata')).replace(microsecond=0)
         xref = self.shared_xref.copy()
         logger.info(list(xref.keys()))
@@ -78,8 +79,10 @@ class SnapAnalysis:
         db_data = json.loads(json.dumps(data, default=str))
         DBHandler.insert_snap_data([db_data])
 
-        greeks_df = self.opt_calc(snap=xref, dt=dt)
-        self.straddle_calc(greeks_df)
+        if calc:
+            logger.info(f'calc values for {dt}')
+            greeks_df = self.opt_calc(snap=xref, dt=dt)
+            self.straddle_calc(greeks_df)
 
     def opt_calc(self, snap, dt):
         opt_df = self.opt_df.copy()
@@ -95,7 +98,7 @@ class SnapAnalysis:
         return df
 
     @staticmethod
-    def straddle_calc(df):
+    def straddle_calc(df: pd.DataFrame):
         call_df = df[(df['opt'] == 'CE')].copy()
         put_df = df[(df['opt'] == 'PE')].copy()
 
@@ -105,12 +108,14 @@ class SnapAnalysis:
         non_zero = (oc_df['ltp_c'] != 0) & (oc_df['ltp_p'] != 0)
         oc_df.loc[non_zero, 'combined_premium'] = (oc_df['ltp_c'] + oc_df['ltp_p'])[non_zero]
         oc_df.loc[non_zero, 'combined_iv'] = (oc_df[['iv_c', 'iv_p']].mean(axis=1))[non_zero]
-        min_combined = oc_df['combined_premium'].min()
-        oc_df['minima'] = oc_df['combined_premium'] == min_combined
+        min_combined = oc_df.groupby(['timestamp', 'underlying', 'expiry'], as_index=False).agg({'combined_premium': 'min'})
+        min_combined['minima'] = True
+        minima_df = oc_df.merge(min_combined, on=['timestamp', 'underlying', 'expiry', 'combined_premium'], how='left')
+        # oc_df['minima'] = oc_df['combined_premium'] == min_combined
 
         req_cols = ['timestamp', 'underlying', 'expiry', 'strike', 'symbol_c', 'symbol_p', 'spot_c', 'ltp_c', 'ltp_p',
                     'oi_c', 'oi_p', 'iv_c', 'iv_p', 'combined_premium', 'combined_iv', 'minima']
-        req_straddle_df = oc_df[req_cols].copy()
+        req_straddle_df = minima_df[req_cols].copy()
         cols_renames = {'symbol_c': 'call', 'symbol_p': 'put', 'spot_c': 'spot', 'ltp_c': 'call_price',
                         'ltp_p': 'put_price', 'oi_c': 'call_oi', 'oi_p': 'put_oi', 'iv_c': 'call_iv', 'iv_p': 'put_iv'}
         req_straddle_df.rename(columns=cols_renames, inplace=True)

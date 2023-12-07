@@ -6,8 +6,9 @@ import sqlalchemy as sql
 import sqlalchemy.exc as sql_exec
 import pandas as pd
 
-from common import logger
-from db_config import engine_str, use_sqlite, s_tbl_snap, n_tbl_snap, s_tbl_opt_greeks, s_tbl_opt_straddle
+from common import logger, today
+from db_config import engine_str, use_sqlite, s_tbl_snap, n_tbl_snap, s_tbl_opt_greeks, s_tbl_opt_straddle, \
+    n_tbl_opt_straddle
 
 execute_retry = True
 pool = sql.create_engine(engine_str, pool_size=10, max_overflow=5, pool_recycle=67, pool_timeout=30, echo=None)
@@ -140,3 +141,23 @@ class DBHandler:
     @classmethod
     def insert_opt_straddle(cls, db_data: list[dict]):
         insert_data(s_tbl_opt_straddle, db_data, ignore=True)
+
+    @classmethod
+    def get_straddle_minima(cls, symbol, expiry):
+        query = f"""
+            SELECT "timestamp" at time zone 'Asia/Kolkata' as ts, strike, combined_premium, combined_iv
+            FROM {n_tbl_opt_straddle}
+            WHERE underlying=%(symbol)s and expiry=%(expiry)s and minima=true and "timestamp">='{today}';
+        """
+        df = read_sql_df(query, params={'symbol': symbol, 'expiry': expiry})
+        return df
+
+    @classmethod
+    def get_straddle_iv_data(cls, symbol, expiry):
+        query = f"""
+                SELECT "timestamp" at time zone 'Asia/Kolkata' as ts, strike, combined_premium, combined_iv, minima
+                FROM {n_tbl_opt_straddle}
+                WHERE underlying=%(symbol)s and expiry=%(expiry)s and "timestamp">='{today}';
+            """
+        df = read_sql_df(query, params={'symbol': symbol, 'expiry': expiry})
+        return df

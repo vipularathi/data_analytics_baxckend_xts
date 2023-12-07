@@ -63,11 +63,12 @@ def get_instruments(force=False):
 
 
 def get_req_contracts():
-    scrips = ['NIFTY']
+    scrips = ['NIFTY', 'BANKNIFTY']
+    expiry = ['2023-12-13', '2023-12-14', '2023-12-28']
     ins = get_instruments()
     nse_ins = ins[ins['exchange'].isin(['NSE', 'NFO'])].copy()
     eq_filter = nse_ins['tradingsymbol'].isin(scrips)
-    der_filter = (nse_ins['name'].isin(scrips)) & (nse_ins['expiry'] == '2023-12-07')
+    der_filter = (nse_ins['name'].isin(scrips)) & (nse_ins['expiry'].isin(expiry))
     req = nse_ins[eq_filter | der_filter].copy()
     tokens = req['instrument_token'].tolist()
     token_xref = req[['instrument_token', 'tradingsymbol']].set_index('instrument_token').to_dict()['tradingsymbol']
