@@ -5,6 +5,7 @@ from datetime import datetime
 from logging.handlers import TimedRotatingFileHandler
 
 import pandas as pd
+import pytz
 from dateutil.relativedelta import relativedelta
 
 root_dir = os.path.dirname(os.path.abspath(__file__))
@@ -21,6 +22,7 @@ holidays = holidays_23 + holidays_24  # List of date objects
 b_days = pd.bdate_range(start=datetime.now()-relativedelta(months=3), end=datetime.now(), freq='C', weekmask='1111100',
                         holidays=holidays)
 today, yesterday = b_days[-1], b_days[-2]
+IST = pytz.timezone('Asia/Kolkata')
 
 
 def define_logger():

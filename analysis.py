@@ -19,27 +19,38 @@ from greeks import get_greeks_intraday
 
 class SnapAnalysis:
 
-    def __init__(self, ins_df, tokens, token_xref, shared_xref):
+    def __init__(self, ins_df, tokens, token_xref, shared_xref, **kwargs):
         super().__init__()
         self.ins_df = ins_df
         self.tokens = tokens
         self.token_xref = token_xref
         self.shared_xref = shared_xref
+        self.rate = kwargs.get('rate', None)
+        self.insert = kwargs.get('insert', True)
+        self.enable_scheduler = kwargs.get('enable_scheduler', True)
+        self.use_synthetic = kwargs.get('use_synthetic', False)
+        self.use_future = kwargs.get('use_future', False)
 
         self.opt_df = None
+        self.fut_map = None
         self.prepare_meta()
 
         self.scheduler = None
-        self.scheduler: BackgroundScheduler = self.init_scheduler()
-        self.scheduler.start()  # Scheduler starts
+        if self.enable_scheduler:
+            self.scheduler: BackgroundScheduler = self.init_scheduler()
+            self.scheduler.start()  # Scheduler starts
 
     def prepare_meta(self):
         req_df, token, token_xref = get_req_contracts()
-        meta_df = req_df[req_df['segment'] == 'NFO-OPT'].copy()
+        meta_df: pd.DataFrame = req_df[req_df['segment'] == 'NFO-OPT'].copy()
         renames = {'tradingsymbol': 'symbol', 'name': 'underlying', 'instrument_type': 'opt'}
         opt_df = meta_df[['tradingsymbol', 'name', 'expiry', 'strike', 'instrument_type']].copy().rename(columns=renames)
         opt_df['expiry'] = opt_df['expiry'].apply(lambda x: x + relativedelta(hour=15, minute=30))
         self.opt_df = opt_df
+        # Check if FUT available
+        fut_df: pd.DataFrame = req_df[req_df['segment'] == 'NFO-FUT'].copy()
+        req_fut = fut_df.sort_values('expiry')[['tradingsymbol', 'name']].drop_duplicates(keep='first').rename(columns=renames, errors='ignore')
+        self.fut_map = req_fut.set_index('underlying').to_dict()['symbol']
 
     def init_scheduler(self):
         if self.scheduler is not None:
@@ -77,28 +88,55 @@ class SnapAnalysis:
         logger.info(list(xref.keys()))
         data = {'timestamp': dt.isoformat(), 'snap': xref}
         db_data = json.loads(json.dumps(data, default=str))
-        DBHandler.insert_snap_data([db_data])
+        if self.insert:
+            DBHandler.insert_snap_data([db_data])
 
         if calc:
             logger.info(f'calc values for {dt}')
             greeks_df = self.opt_calc(snap=xref, dt=dt)
             self.straddle_calc(greeks_df)
 
+    @staticmethod
+    def floor_strike(row):
+        strikes = np.array(row['strike'])
+        st = strikes[strikes <= row['current']].max()
+        return st
+
     def opt_calc(self, snap, dt):
-        opt_df = self.opt_df.copy()
+        opt_df: pd.DataFrame = self.opt_df.copy()
         opt_df['ltp'] = opt_df['symbol'].apply(self.get_ltp, args=(snap,))
         opt_df['oi'] = opt_df['symbol'].apply(self.get_oi, args=(snap,))
-        opt_df['spot'] = opt_df['underlying'].apply(self.get_ltp, args=(snap,))
+        if self.use_future:
+            opt_df['spot'] = opt_df['underlying'].apply(lambda x: self.get_ltp(self.fut_map.get(x, x), snap))
+        elif self.use_synthetic:
+            underlyings = opt_df.groupby(['underlying', 'expiry'], as_index=False).agg({'strike': list})
+            underlyings['current'] = underlyings['underlying'].apply(self.get_ltp, args=(snap,))
+            underlyings['strike'] = underlyings.apply(self.floor_strike, axis=1)
+
+            req_strikes = opt_df.merge(underlyings, how='inner', on=['underlying', 'expiry', 'strike'])
+            req_strikes = req_strikes.drop(columns=['oi', 'current'])
+            call_strikes = req_strikes[req_strikes['opt'] == 'CE'].drop(columns=['opt'])
+            put_strikes = req_strikes[req_strikes['opt'] == 'PE'].drop(columns=['opt'])
+            strike_df = call_strikes.merge(put_strikes, how='outer', on=['underlying', 'expiry', 'strike'], suffixes=('_call', '_put'))
+            underlying_df = underlyings.merge(strike_df, how='left', on=['underlying', 'expiry', 'strike'])
+            underlying_df['spot'] = underlying_df['ltp_call'].fillna(0) - underlying_df['ltp_put'].fillna(0) + underlying_df['strike']
+            underlying_df = underlying_df[['underlying', 'expiry', 'spot']]
+
+            opt_df = opt_df.merge(underlying_df, how='inner', on=['underlying', 'expiry'])
+        else:
+            opt_df['spot'] = opt_df['underlying'].apply(self.get_ltp, args=(snap,))
+
         greeks = opt_df.apply(
-            lambda x: pd.Series(get_greeks_intraday(x['spot'], x['strike'], x['expiry'], x['opt'], x['ltp'], dt)),
+            lambda x: pd.Series(get_greeks_intraday(x['spot'], x['strike'], x['expiry'], x['opt'], x['ltp'], dt,
+                                                    risk_free_rate=self.rate / 100)),
             axis=1)
         df = opt_df.join(greeks)
         df.insert(0, 'timestamp', dt)
-        DBHandler.insert_opt_greeks(df.replace({np.NAN: None}).to_dict('records'))
+        if self.insert:
+            DBHandler.insert_opt_greeks(df.replace({np.NAN: None}).to_dict('records'))
         return df
 
-    @staticmethod
-    def straddle_calc(df: pd.DataFrame):
+    def straddle_calc(self, df: pd.DataFrame):
         call_df = df[(df['opt'] == 'CE')].copy()
         put_df = df[(df['opt'] == 'PE')].copy()
 
@@ -119,8 +157,9 @@ class SnapAnalysis:
         cols_renames = {'symbol_c': 'call', 'symbol_p': 'put', 'spot_c': 'spot', 'ltp_c': 'call_price',
                         'ltp_p': 'put_price', 'oi_c': 'call_oi', 'oi_p': 'put_oi', 'iv_c': 'call_iv', 'iv_p': 'put_iv'}
         req_straddle_df.rename(columns=cols_renames, inplace=True)
-        # insert req_straddle_df
-        DBHandler.insert_opt_straddle(req_straddle_df.replace({np.NAN: None}).to_dict('records'))
+        if self.insert:
+            # insert req_straddle_df
+            DBHandler.insert_opt_straddle(req_straddle_df.replace({np.NAN: None}).to_dict('records'))
         return req_straddle_df
 
     @staticmethod

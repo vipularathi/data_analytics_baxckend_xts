@@ -1,12 +1,13 @@
 import io
 import os
 from datetime import datetime
+from functools import partial, reduce
 from time import time
 
 import pandas as pd
 import requests
 
-from common import logger, instruments_path, today
+from common import logger, instruments_path, today, root_dir
 
 renames = {'NIFTY 50': 'NIFTY', 'NIFTY BANK': 'BANKNIFTY', 'NIFTY IT': 'NIFTYIT',
            'NIFTY FINANCIAL SERVICES': 'FINNIFTY', 'NIFTY FIN SERVICE': 'FINNIFTY',
@@ -63,13 +64,28 @@ def get_instruments(force=False):
 
 
 def get_req_contracts():
-    scrips = ['NIFTY', 'BANKNIFTY']
-    expiry = ['2023-12-13', '2023-12-14', '2023-12-28']
+    # scrips = ['NIFTY', 'BANKNIFTY']
+    # expiry = ['2023-12-13', '2023-12-14', '2023-12-28']
+    ent_exp = entity_expiry()
+    scrips = ent_exp.keys()
     ins = get_instruments()
     nse_ins = ins[ins['exchange'].isin(['NSE', 'NFO'])].copy()
     eq_filter = nse_ins['tradingsymbol'].isin(scrips)
-    der_filter = (nse_ins['name'].isin(scrips)) & (nse_ins['expiry'].isin(expiry))
-    req = nse_ins[eq_filter | der_filter].copy()
+    der_filters = [eq_filter]
+    for _name, _info in ent_exp.items():
+        _der_filter = (nse_ins['name'].isin([_name])) & (nse_ins['expiry'].isin(_info['expiry']))
+        der_filters.append(_der_filter)
+    entity_filter = reduce(partial(lambda x, y: x | y), der_filters)
+    req = nse_ins[entity_filter].copy()
     tokens = req['instrument_token'].tolist()
     token_xref = req[['instrument_token', 'tradingsymbol']].set_index('instrument_token').to_dict()['tradingsymbol']
     return req, tokens, token_xref
+
+
+def entity_expiry():
+    symbols = pd.read_excel(os.path.join(root_dir, 'symbols.xlsx'))
+    if not symbols[symbols['expiry'] < today].empty:
+        raise ValueError('Expired contracts filled')
+    req = symbols.groupby(['symbol']).agg({'expiry': set})
+    req['expiry'] = req['expiry'].apply(list)
+    return req.to_dict('index')
