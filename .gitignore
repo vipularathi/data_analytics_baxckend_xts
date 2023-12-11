@@ -4,3 +4,4 @@ entity_data
 logs
 test*.py
 *.xlsx
+venv
