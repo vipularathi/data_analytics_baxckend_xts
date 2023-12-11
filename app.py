@@ -37,15 +37,25 @@ class ServiceApp:
 
     def fetch_straddle_minima(self, symbol: str = Query(), expiry: date = Query()):
         df = DBHandler.get_straddle_minima(symbol, expiry)
-        return self.df_response(df)
+        return self._straddle_response(df)
 
     def fetch_straddle_iv(self, symbol: str = Query(), expiry: date = Query()):
         df = DBHandler.get_straddle_iv_data(symbol, expiry)
-        return self.df_response(df)
+        return self._straddle_response(df)
+
+    def _straddle_response(self, df: pd.DataFrame):
+        df['range'] = (df['spot'] - df['strike']).abs() < (df['spot'] * 0.05)
+        df = df[df['range']].copy()
+        df.drop(columns=['spot', 'range'], errors='ignore', inplace=True)
+        df.sort_values(['ts', 'strike'], inplace=True)
+        return self.df_response(df, to_millis=['ts'])
 
     @staticmethod
-    def df_response(df: pd.DataFrame) -> list[dict]:
+    def df_response(df: pd.DataFrame, to_millis: list = None) -> list[dict]:
         df = df.replace({np.NAN: None}).round(2)
+        if to_millis is not None and len(to_millis):
+            for _col in to_millis:
+                df[_col] = (df[_col].astype('int64') // 10**9) * 1000
         return df.to_dict('records')
 
 

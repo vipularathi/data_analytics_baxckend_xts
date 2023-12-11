@@ -123,7 +123,7 @@ class DBHandler:
 
     @classmethod
     def insert_snap_data(cls, db_data: list[dict]):
-        insert_data(s_tbl_snap, db_data)
+        insert_data(s_tbl_snap, db_data, ignore=True)
 
     @classmethod
     def get_snap_data(cls, ts: datetime):
@@ -145,7 +145,7 @@ class DBHandler:
     @classmethod
     def get_straddle_minima(cls, symbol, expiry):
         query = f"""
-            SELECT "timestamp" at time zone 'Asia/Kolkata' as ts, strike, combined_premium, combined_iv
+            SELECT "timestamp" at time zone 'Asia/Kolkata' as ts, spot, strike, combined_premium, combined_iv
             FROM {n_tbl_opt_straddle}
             WHERE underlying=%(symbol)s and expiry=%(expiry)s and minima=true and "timestamp">='{today}';
         """
@@ -155,7 +155,7 @@ class DBHandler:
     @classmethod
     def get_straddle_iv_data(cls, symbol, expiry):
         query = f"""
-                SELECT "timestamp" at time zone 'Asia/Kolkata' as ts, strike, combined_premium, combined_iv, minima
+                SELECT "timestamp" at time zone 'Asia/Kolkata' as ts, spot, strike, combined_premium, combined_iv, minima
                 FROM {n_tbl_opt_straddle}
                 WHERE underlying=%(symbol)s and expiry=%(expiry)s and "timestamp">='{today}';
             """

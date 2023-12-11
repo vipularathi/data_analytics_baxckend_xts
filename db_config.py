@@ -36,6 +36,7 @@ s_tbl_snap = Table(
     Column('snap', JSONB, nullable=False),
     Column('created_at', TIMESTAMP(True), server_default=func.current_timestamp()),
     Column('updated_at', TIMESTAMP(True), server_default=func.current_timestamp()),
+    UniqueConstraint('timestamp', name=f'uq_{n_tbl_snap}_record')
 )
 
 n_tbl_opt_greeks = 'opt_greeks'

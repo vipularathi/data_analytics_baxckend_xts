@@ -25,7 +25,7 @@ class SnapAnalysis:
         self.tokens = tokens
         self.token_xref = token_xref
         self.shared_xref = shared_xref
-        self.rate = kwargs.get('rate', None)
+        self.rate = kwargs.get('rate', 10)
         self.insert = kwargs.get('insert', True)
         self.enable_scheduler = kwargs.get('enable_scheduler', True)
         self.use_synthetic = kwargs.get('use_synthetic', False)
