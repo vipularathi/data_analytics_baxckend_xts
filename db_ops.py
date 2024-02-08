@@ -143,11 +143,11 @@ class DBHandler:
         insert_data(s_tbl_opt_straddle, db_data, ignore=True)
 
     @classmethod
-    def get_straddle_minima(cls, symbol, expiry):
+    def get_straddle_minima(cls, symbol, expiry, start_from=today):
         query = f"""
-            SELECT "timestamp" at time zone 'Asia/Kolkata' as ts, spot, strike, combined_premium, combined_iv
+            SELECT "timestamp" at time zone 'Asia/Kolkata' as ts, spot, strike, combined_premium, combined_iv, otm_iv
             FROM {n_tbl_opt_straddle}
-            WHERE underlying=%(symbol)s and expiry=%(expiry)s and minima=true and "timestamp">='{today}';
+            WHERE underlying=%(symbol)s and expiry=%(expiry)s and minima=true and "timestamp">='{start_from}';
         """
         df = read_sql_df(query, params={'symbol': symbol, 'expiry': expiry})
         return df
@@ -155,7 +155,7 @@ class DBHandler:
     @classmethod
     def get_straddle_iv_data(cls, symbol, expiry):
         query = f"""
-                SELECT "timestamp" at time zone 'Asia/Kolkata' as ts, spot, strike, combined_premium, combined_iv, minima
+                SELECT "timestamp" at time zone 'Asia/Kolkata' as ts, spot, strike, combined_premium, combined_iv, otm_iv, minima
                 FROM {n_tbl_opt_straddle}
                 WHERE underlying=%(symbol)s and expiry=%(expiry)s and "timestamp">='{today}';
             """

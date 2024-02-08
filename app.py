@@ -8,6 +8,7 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from common import IST, yesterday, today
 from contracts import get_req_contracts
 from db_ops import DBHandler
 
@@ -22,6 +23,7 @@ class ServiceApp:
 
         self.add_routes()
         self.symbol_expiry_map = None
+        self.use_otm_iv = True
 
     def add_routes(self):
         self.app.add_api_route('/', methods=['GET'], endpoint=self.default)
@@ -44,19 +46,30 @@ class ServiceApp:
             self.symbol_expiry_map = agg.to_dict('records')
         return self.symbol_expiry_map
 
-    def fetch_straddle_minima(self, symbol: str = Query(), expiry: date = Query()):
-        df = DBHandler.get_straddle_minima(symbol, expiry)
-        return self._straddle_response(df)
+    def fetch_straddle_minima(self, symbol: str = Query(), expiry: date = Query(), st_cnt: int = Query(default=None), interval: int = Query(5), cont: bool = Query(False)):
+        if cont:
+            df = DBHandler.get_straddle_minima(symbol, expiry, start_from=yesterday)
+            df['prev'] = df['ts'] < today
+        else:
+            df = DBHandler.get_straddle_minima(symbol, expiry)
+            df['prev'] = False
+        if self.use_otm_iv:
+            df['combined_iv'] = df['otm_iv']
+        return self._straddle_response(df, count=st_cnt, interval=interval)
 
-    def fetch_straddle_iv(self, symbol: str = Query(), expiry: date = Query()):
+    def fetch_straddle_iv(self, symbol: str = Query(), expiry: date = Query(), st_cnt: int = Query(default=None), interval: int = Query(5)):
         df = DBHandler.get_straddle_iv_data(symbol, expiry)
-        return self._straddle_response(df)
+        if self.use_otm_iv:
+            df['combined_iv'] = df['otm_iv']
+        return self._straddle_response(df, count=st_cnt, interval=interval)
 
-    def fetch_straddle_cluster(self, symbol: str = Query(), expiry: date = Query(), interval: str = Query('5min')):
+    def fetch_straddle_cluster(self, symbol: str = Query(), expiry: date = Query(), st_cnt: int = Query(default=8), interval: int = Query(5)):
         df = DBHandler.get_straddle_iv_data(symbol, expiry)
-        allowed = pd.date_range(df['ts'].min(), df['ts'].max(), freq=interval)
-        req = df[df['ts'].isin(allowed)].copy()
-        req = self._straddle_response(req, raw=True)
+        if self.use_otm_iv:
+            df['combined_iv'] = df['otm_iv']
+        # allowed = pd.date_range(df['ts'].min(), df['ts'].max(), freq=interval)
+        # req = df[df['ts'].isin(allowed)].copy()
+        req = self._straddle_response(df, raw=True, count=st_cnt, interval=interval)
         req = req.replace({np.NAN: None}).round(2)
         strike_iv = req.groupby(['strike'], as_index=False).agg({'combined_iv': list})
         strike_iv.sort_values(['strike'], inplace=True)
@@ -64,17 +77,23 @@ class ServiceApp:
         iv = list(zip(*strike_iv['combined_iv'].tolist()))
         return {'strikes': strikes, 'iv': iv}
 
-    def _straddle_response(self, df: pd.DataFrame, raw=False):
+    def _straddle_response(self, df: pd.DataFrame, raw=False, count: int = None, interval: int = None):
+        count = 10 if count is None else count
+        l_st, u_st = count + 1, count
         # df['range'] = (df['spot'] - df['strike']).abs() < (df['spot'] * 0.05)
         # strikes = df[df['range']]['strike'].unique()
         mean = df['spot'].mean()
         uq_strikes = df['strike'].unique()
         uq_strikes.sort()
-        strikes = uq_strikes[uq_strikes <= mean][-11:].tolist() + uq_strikes[uq_strikes > mean][:10].tolist()
+        strikes = uq_strikes[uq_strikes <= mean][-l_st:].tolist() + uq_strikes[uq_strikes > mean][:u_st].tolist()
         # print(uq_strikes, strikes)
         df = df[df['strike'].isin(strikes)].copy()
         df.drop(columns=['spot', 'range'], errors='ignore', inplace=True)
         df.sort_values(['ts', 'strike'], inplace=True)
+        if interval:
+            valid_ts = pd.date_range(start=df['ts'].min(), end=df['ts'].max(), freq=f'{interval}min')
+            if len(valid_ts):
+                df = df[df['ts'].isin(valid_ts)].copy()
         if raw:
             return df
         return self.df_response(df, to_millis=['ts'])
@@ -84,7 +103,7 @@ class ServiceApp:
         df = df.replace({np.NAN: None}).round(2)
         if to_millis is not None and len(to_millis):
             for _col in to_millis:
-                df[_col] = (df[_col].astype('int64') // 10**9) * 1000
+                df[_col] = (df[_col].dt.tz_localize(IST).astype('int64') // 10**9) * 1000
         return df.to_dict('records')
 
 

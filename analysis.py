@@ -29,6 +29,7 @@ class SnapAnalysis:
         self.insert = kwargs.get('insert', True)
         self.enable_scheduler = kwargs.get('enable_scheduler', True)
         self.use_synthetic = kwargs.get('use_synthetic', False)
+        self.use_forward_fut = kwargs.get('use_forward_fut', False)
         self.use_future = kwargs.get('use_future', False)
 
         self.opt_df = None
@@ -102,6 +103,18 @@ class SnapAnalysis:
         st = strikes[strikes <= row['current']].max()
         return st
 
+    @staticmethod
+    def mround_strike(row):
+        """Similar to excel mround function"""
+        price = row['current']
+        strikes = pd.Series(row['strike'])
+        strikes = strikes.drop_duplicates().sort_values()
+        base = (strikes[1:] - strikes.shift(1)[:-1]).min()
+        m1 = base * int(price / base)
+        m2 = m1 + base
+        m = m1 if abs(price - m1) < abs(price - m2) else m2
+        return m
+
     def opt_calc(self, snap, dt):
         opt_df: pd.DataFrame = self.opt_df.copy()
         opt_df['ltp'] = opt_df['symbol'].apply(self.get_ltp, args=(snap,))
@@ -112,6 +125,22 @@ class SnapAnalysis:
             underlyings = opt_df.groupby(['underlying', 'expiry'], as_index=False).agg({'strike': list})
             underlyings['current'] = underlyings['underlying'].apply(self.get_ltp, args=(snap,))
             underlyings['strike'] = underlyings.apply(self.floor_strike, axis=1)
+
+            req_strikes = opt_df.merge(underlyings, how='inner', on=['underlying', 'expiry', 'strike'])
+            req_strikes = req_strikes.drop(columns=['oi', 'current'])
+            call_strikes = req_strikes[req_strikes['opt'] == 'CE'].drop(columns=['opt'])
+            put_strikes = req_strikes[req_strikes['opt'] == 'PE'].drop(columns=['opt'])
+            strike_df = call_strikes.merge(put_strikes, how='outer', on=['underlying', 'expiry', 'strike'], suffixes=('_call', '_put'))
+            underlying_df = underlyings.merge(strike_df, how='left', on=['underlying', 'expiry', 'strike'])
+            underlying_df['spot'] = underlying_df['ltp_call'].fillna(0) - underlying_df['ltp_put'].fillna(0) + underlying_df['strike']
+            underlying_df = underlying_df[['underlying', 'expiry', 'spot']]
+
+            opt_df = opt_df.merge(underlying_df, how='inner', on=['underlying', 'expiry'])
+        elif self.use_forward_fut:
+            underlyings = opt_df.groupby(['underlying', 'expiry'], as_index=False).agg({'strike': list})
+            underlyings['current'] = underlyings['underlying'].apply(lambda x: self.get_ltp(self.fut_map.get(x, x), snap))
+            underlyings.dropna(subset=['current'], inplace=True)
+            underlyings['strike'] = underlyings.apply(self.mround_strike, axis=1)
 
             req_strikes = opt_df.merge(underlyings, how='inner', on=['underlying', 'expiry', 'strike'])
             req_strikes = req_strikes.drop(columns=['oi', 'current'])
@@ -146,13 +175,16 @@ class SnapAnalysis:
         non_zero = (oc_df['ltp_c'] != 0) & (oc_df['ltp_p'] != 0)
         oc_df.loc[non_zero, 'combined_premium'] = (oc_df['ltp_c'] + oc_df['ltp_p'])[non_zero]
         oc_df.loc[non_zero, 'combined_iv'] = (oc_df[['iv_c', 'iv_p']].mean(axis=1))[non_zero]
+        call_otm = oc_df['strike'] >= oc_df['spot_c']
+        oc_df['otm_iv'] = np.where(call_otm, oc_df['iv_c'].values, oc_df['iv_p'].values)
         min_combined = oc_df.groupby(['timestamp', 'underlying', 'expiry'], as_index=False).agg({'combined_premium': 'min'})
         min_combined['minima'] = True
         minima_df = oc_df.merge(min_combined, on=['timestamp', 'underlying', 'expiry', 'combined_premium'], how='left')
+        minima_df['minima'].fillna(False, inplace=True)
         # oc_df['minima'] = oc_df['combined_premium'] == min_combined
 
         req_cols = ['timestamp', 'underlying', 'expiry', 'strike', 'symbol_c', 'symbol_p', 'spot_c', 'ltp_c', 'ltp_p',
-                    'oi_c', 'oi_p', 'iv_c', 'iv_p', 'combined_premium', 'combined_iv', 'minima']
+                    'oi_c', 'oi_p', 'iv_c', 'iv_p', 'combined_premium', 'combined_iv', 'otm_iv', 'minima']
         req_straddle_df = minima_df[req_cols].copy()
         cols_renames = {'symbol_c': 'call', 'symbol_p': 'put', 'spot_c': 'spot', 'ltp_c': 'call_price',
                         'ltp_p': 'put_price', 'oi_c': 'call_oi', 'oi_p': 'put_oi', 'iv_c': 'call_iv', 'iv_p': 'put_iv'}
@@ -173,7 +205,7 @@ class SnapAnalysis:
 
 def start_analysis(ins_df, tokens, token_xref, shared_xref):
     try:
-        SnapAnalysis(ins_df, tokens, token_xref, shared_xref)
+        SnapAnalysis(ins_df, tokens, token_xref, shared_xref, use_forward_fut=True, rate=0)
 
         while True:
             sleep(10)

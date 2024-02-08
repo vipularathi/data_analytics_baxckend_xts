@@ -80,6 +80,7 @@ s_tbl_opt_straddle = Table(
     Column('put_iv', Float),
     Column('combined_premium', Float),
     Column('combined_iv', Float),
+    Column('otm_iv', Float),
     Column('minima', BOOLEAN),
     UniqueConstraint('timestamp', 'underlying', 'expiry', 'strike', name=f'uq_{n_tbl_opt_straddle}_record')
 )
