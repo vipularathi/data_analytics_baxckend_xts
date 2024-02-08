@@ -148,7 +148,7 @@ class CandleCreator:
                     if len(_feed) > 0:
                         for _e_feed in _feed:
                             _data = self._extract_feed_v4(_e_feed)
-                            self._ltp_queue.put(_data)
+                            # self._ltp_queue.put(_data)
                             self._update_shared_xref(_e_feed)
                         # logger.info(self.shared_xref.copy())
                 else:

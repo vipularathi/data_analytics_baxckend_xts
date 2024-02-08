@@ -65,8 +65,13 @@ class ServiceApp:
         return {'strikes': strikes, 'iv': iv}
 
     def _straddle_response(self, df: pd.DataFrame, raw=False):
-        df['range'] = (df['spot'] - df['strike']).abs() < (df['spot'] * 0.05)
-        strikes = df[df['range']]['strike'].unique()
+        # df['range'] = (df['spot'] - df['strike']).abs() < (df['spot'] * 0.05)
+        # strikes = df[df['range']]['strike'].unique()
+        mean = df['spot'].mean()
+        uq_strikes = df['strike'].unique()
+        uq_strikes.sort()
+        strikes = uq_strikes[uq_strikes <= mean][-11:].tolist() + uq_strikes[uq_strikes > mean][:10].tolist()
+        # print(uq_strikes, strikes)
         df = df[df['strike'].isin(strikes)].copy()
         df.drop(columns=['spot', 'range'], errors='ignore', inplace=True)
         df.sort_values(['ts', 'strike'], inplace=True)

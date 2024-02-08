@@ -85,7 +85,7 @@ class SnapAnalysis:
     def run_analysis(self, calc=True):
         dt = datetime.now(tz=pytz.timezone('Asia/Kolkata')).replace(microsecond=0)
         xref = self.shared_xref.copy()
-        logger.info(list(xref.keys()))
+        logger.info(len(xref))
         data = {'timestamp': dt.isoformat(), 'snap': xref}
         db_data = json.loads(json.dumps(data, default=str))
         if self.insert:
