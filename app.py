@@ -64,7 +64,21 @@ class ServiceApp:
         return self._straddle_response(df, count=st_cnt, interval=interval)
 
     def fetch_straddle_cluster(self, symbol: str = Query(), expiry: date = Query(), st_cnt: int = Query(default=8), interval: int = Query(5)):
-        df = DBHandler.get_straddle_iv_data(symbol, expiry)
+        all_df = DBHandler.get_straddle_iv_data(symbol, expiry, start_from=yesterday)
+        all_data = []
+        today_df = all_df[all_df['ts'] >= today].copy()
+        prev_df = all_df[all_df['ts'] < today].copy()
+        if len(prev_df):
+            max_ts = prev_df['ts'].max()
+            prev_df = prev_df[prev_df['ts'] == max_ts].copy()
+            all_data.append(prev_df)
+        if len(today_df):
+            all_data.append(today_df)
+
+        if all_data:
+            df = pd.concat(all_data, ignore_index=True, sort=False)
+        else:
+            df = all_df.iloc[:0]
         if self.use_otm_iv:
             df['combined_iv'] = df['otm_iv']
         # allowed = pd.date_range(df['ts'].min(), df['ts'].max(), freq=interval)
