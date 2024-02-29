@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime, time
 
 import numpy as np
 import pandas as pd
@@ -63,7 +63,7 @@ class ServiceApp:
             df['combined_iv'] = df['otm_iv']
         return self._straddle_response(df, count=st_cnt, interval=interval)
 
-    def fetch_straddle_cluster(self, symbol: str = Query(), expiry: date = Query(), st_cnt: int = Query(default=8), interval: int = Query(5)):
+    def fetch_straddle_cluster(self, symbol: str = Query(), expiry: date = Query(), st_cnt: int = Query(default=15), interval: int = Query(5)):
         all_df = DBHandler.get_straddle_iv_data(symbol, expiry, start_from=yesterday)
         all_data = []
         today_df = all_df[all_df['ts'] >= today].copy()
@@ -83,13 +83,25 @@ class ServiceApp:
             df['combined_iv'] = df['otm_iv']
         # allowed = pd.date_range(df['ts'].min(), df['ts'].max(), freq=interval)
         # req = df[df['ts'].isin(allowed)].copy()
-        req = self._straddle_response(df, raw=True, count=st_cnt, interval=interval)
+        break_ts = time(12, 30, 0)
+        req1 = self._straddle_response(df, raw=True, count=st_cnt, interval=15)
+        req1 = req1[req1['ts'].dt.time <= break_ts].copy()
+        req2 = self._straddle_response(df, raw=True, count=st_cnt, interval=30)
+        req2 = req2[req2['ts'].dt.time > break_ts].copy()  # prev day covered here
+        d = [req1, req2]
+        d = [_d for _d in d if len(d)]
+        if d:
+            req = pd.concat(d, ignore_index=True, sort=False)
+            req.sort_values(['ts', 'strike'], inplace=True)
+        else:
+            req = pd.DataFrame(columns=req1.columns)
         req = req.replace({np.NAN: None}).round(2)
-        strike_iv = req.groupby(['strike'], as_index=False).agg({'combined_iv': list})
+        strike_iv = req.groupby(['strike'], as_index=False).agg({'combined_iv': list, 'ts': list})
         strike_iv.sort_values(['strike'], inplace=True)
         strikes = strike_iv['strike'].tolist()
         iv = list(zip(*strike_iv['combined_iv'].tolist()))
-        return {'strikes': strikes, 'iv': iv}
+        ts = list(zip(*strike_iv['ts'].tolist()))
+        return {'strikes': strikes, 'iv': iv, 'ts': ts}
 
     def _straddle_response(self, df: pd.DataFrame, raw=False, count: int = None, interval: int = None):
         count = 10 if count is None else count
@@ -101,10 +113,10 @@ class ServiceApp:
         uq_strikes.sort()
         strikes = uq_strikes[uq_strikes <= mean][-l_st:].tolist() + uq_strikes[uq_strikes > mean][:u_st].tolist()
         # print(uq_strikes, strikes)
-        df = df[df['strike'].isin(strikes)].copy()
+        df: pd.DataFrame = df[df['strike'].isin(strikes)].copy()
         df.drop(columns=['spot', 'range'], errors='ignore', inplace=True)
         df.sort_values(['ts', 'strike'], inplace=True)
-        if interval:
+        if interval and len(df):
             valid_ts = pd.date_range(start=df['ts'].min(), end=df['ts'].max(), freq=f'{interval}min')
             if len(valid_ts):
                 df = df[df['ts'].isin(valid_ts)].copy()
@@ -115,7 +127,7 @@ class ServiceApp:
     @staticmethod
     def df_response(df: pd.DataFrame, to_millis: list = None) -> list[dict]:
         df = df.replace({np.NAN: None}).round(2)
-        if to_millis is not None and len(to_millis):
+        if to_millis is not None and len(to_millis) and len(df):
             for _col in to_millis:
                 df[_col] = (df[_col].dt.tz_localize(IST).astype('int64') // 10**9) * 1000
         return df.to_dict('records')
