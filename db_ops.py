@@ -5,10 +5,11 @@ from time import time, sleep
 import sqlalchemy as sql
 import sqlalchemy.exc as sql_exec
 import pandas as pd
+from sqlalchemy import insert, select
 
 from common import logger, today
 from db_config import engine_str, use_sqlite, s_tbl_snap, n_tbl_snap, s_tbl_opt_greeks, s_tbl_opt_straddle, \
-    n_tbl_opt_straddle
+    n_tbl_opt_straddle, s_tbl_creds
 
 execute_retry = True
 pool = sql.create_engine(engine_str, pool_size=10, max_overflow=5, pool_recycle=67, pool_timeout=30, echo=None)
@@ -74,7 +75,7 @@ def execute_query(query, retry=2, wait_period=5, params=None):
     if params is None:
         params = {}
     st = time()
-    short_query = query[:int(len(query)*0.25)]
+    short_query = query[:int(len(query)*0.25)] if type(query) is str else ''
     # logger.debug(f'Executing query...{short_query}...')
     # engine = sql.create_engine(engine_str)
     try:
@@ -107,6 +108,74 @@ def read_sql_df(query, params=None, commit=False):
     # engine.dispose()
     # logger.debug(f'Data read in {time() - st} secs')
     return df
+
+
+# insert query - credentials    # remove pool
+def insert_creds(appkey, secretkey, userid, token, commit=False):
+
+    with pool.connect() as conn:
+
+        insert_query = insert(s_tbl_creds).values(
+            appkey=appkey,
+            secretkey=secretkey,
+            userid=userid,
+            token=token
+        )
+
+        # print("insert_query: ", insert_query)
+        conn.execute(insert_query)
+        if commit:
+            conn.execute('commit')
+        conn.close()
+
+        print("token inserted in DB")
+
+
+# select query - credentials
+def select_creds():
+    with pool.connect() as conn:
+
+        select_query = select(s_tbl_creds).where(s_tbl_creds.c.status == 'active')
+        res = conn.execute(select_query).fetchall()
+        conn.close()
+        if len(res) == 0:       # not found
+            return 0
+
+        res = res[0]    # found
+        return res[1], res[2], res[3], res[4]       # appkey, secretkey, userid, token
+
+
+# select query - credentials - token
+def get_token(appkey):
+    with pool.connect() as conn:
+
+        select_query = select(s_tbl_creds).where(s_tbl_creds.c.appkey == appkey)
+        res = conn.execute(select_query).fetchall()
+        conn.close()
+        if len(res) == 0:       # not found
+            return 0
+
+        res = res[0]    # found
+        return res[4]       # token
+
+
+def update_creds(appkey: str, new_token: str, commit=False):
+    if select_creds(appkey) != 0:
+        with pool.connect() as conn:
+
+            update_query = s_tbl_creds.update().where(s_tbl_creds.c.appkey == appkey).values(token=new_token)
+
+            print("update_query: ", update_query)
+            conn.execute(update_query)
+            if commit:
+                conn.execute('commit')
+            conn.close()
+
+            print("updated successfully")
+
+    else:
+        print("record not found")
+
 
 
 class DBHandler:

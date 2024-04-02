@@ -8,3 +8,5 @@ venv
 *.zip
 *.ipynb
 extra
+*.csv
+*.whl

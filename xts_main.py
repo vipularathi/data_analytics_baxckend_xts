@@ -3,17 +3,27 @@ from threading import Thread
 from concurrent.futures import ProcessPoolExecutor
 import logging
 import os
+from time import sleep
+
 import numpy as np
 import requests
 import pandas as pd
 import socketio
 import json
 import multiprocessing as mp
+# from multiprocessing import Manager
 from datetime import datetime, timedelta
+
+from dateutil.relativedelta import relativedelta
+
+import db_ops
+from common import today, logger
+from data_handler import DataHandler, init_candle_creator
+
 # import xts_models
 
-logger = logging.getLogger()
-logger.setLevel(logging.INFO)
+# logger = logging.getLogger()
+# logger.setLevel(logging.INFO)
 
 host = "https://algozy.rathi.com:3000"
 socket_url = "wss://algozy.rathi.com:3000"
@@ -88,7 +98,7 @@ def gen_headers(tokens: list):
     return headers
 
 
-# test token validity - subscribe to ACC temporarily
+# test token validity - subscribe to ACC temporarily - pending
 def test_token(token):
 
     subscription_payload = {token: create_payload([22], [1])}   # ACC for testing
@@ -128,7 +138,6 @@ def subscribe_init(tokens, headers, ch, df):
         print("choice is subs")
         # subscribe symbols - for each token
         for token in tokens:
-            print("using token")
             status_code, status = subs(subscription_payload[token], headers[token])     # market data
             status_list.append([status_code, status])
             status_code, status = subs(subscription_payload_oi[token], headers[token])  # open interest
@@ -302,82 +311,44 @@ def process_queue(latest_feed_xref):
 
 
 def get_token_header():
-    # creds = {}
-    # cnt = 0
-    # while True:
-    #     appkey = str(input("appkey: "))
-    #     secretkey = str(input("secretkey: "))
-    #     userid = str(input("userid: "))
-    #     ch = str(input("More credentials?(Y/N): "))
-    #
-    #     cnt += 1
-    #     creds.setdefault(f"user{cnt}", {}).update({
-    #         "appkey": appkey,
-    #         "secretkey": secretkey,
-    #         "userid": userid
-    #     })
-    #
-    #     if ch.lower() != 'y':
-    #         break
 
+    # get creds directly from db
     creds = {'user1': {'appkey': '880cf50aaa5e4d495c1405', 'secretkey': 'Tjdk062@i1', 'userid': 'AA143'}, 'user2': {'appkey': '5c7e23fd3fff9c9cdb9126', 'secretkey': 'Aajs181$wG', 'userid': 'AA143'}}
     tokens = []
     userids = []
 
-    # csv exists - implement DB later
-    if os.path.exists('creds.csv'):
-        df = pd.read_csv('creds.csv')
+    for user, cred in creds.items():    # read directly from DB
 
-        for user, cred in creds.items():
+        # check for data in DB - found
+        if db_ops.select_creds(cred['appkey']) != 0:
 
-            # check for data in csv
-            if df['appkey'].isin([cred['appkey']]).any():
+            # get token from DB
+            token = db_ops.select_creds(cred['appkey'])
 
-                # get token from csv and collect to tokens list
-                token = (df[df['appkey'].isin([cred['appkey']])]['token'].fillna("NULL").to_string(index=False))
+            if test_token(token) == 400:
 
-                if test_token(token) >= 400:
-
-                    # create new token & update in the csv - no need to test the new token
-                    index = pd.Index(df['token']).get_loc(token)
-                    token = create_token(cred['secretkey'], cred['appkey'])
-                    df['token'].iloc[index] = token
-                    df.to_csv('creds.csv', index=False)
-
-                else:
-                    print("token test successful")
-
-                tokens.append(token)
-                userids.append(cred['userid'])
-
-            # data not found
-            else:
-                # generate token and append in the csv
+                # create new token & update in the DB - no need to test the new token
                 token = create_token(cred['secretkey'], cred['appkey'])
+                db_ops.update_creds(cred['appkey'], token)
 
-                data = {
-                    "appkey": cred['appkey'],
-                    "secretkey": cred['secretkey'],
-                    "userid": cred['userid'],
-                    "token": token
-                }
-                df = pd.DataFrame([data.values()])
-                df.to_csv('creds.csv', mode='a', index=False, header=False)
+            else:
+                print("token test successful")
 
-    # csv not exists
-    else:
-        # create csv
-        for user, cred in creds.items():
-            token = create_token(cred['secretkey'], cred['appkey'])
-
-            data = {"appkey": cred['appkey'], "secretkey": cred['secretkey'], "userid": cred['userid'], "token": token}
-            df = pd.DataFrame([data])
-            df.to_csv('creds.csv', mode='a', index=False, header=not os.path.exists('creds.csv'))
+            # create combine dict - pending
             tokens.append(token)
+            userids.append(cred['userid'])
+
+        # data not found
+        else:
+            # generate token and insert in the DB
+            token = create_token(cred['secretkey'], cred['appkey'])
+            db_ops.insert_creds(cred['appkey'], cred['secretkey'], cred['userid'], token)
+
+        tokens.append(token)
 
     headers = gen_headers(tokens)
     # choice = input("Subscribe / Unsubscribe (subs/unsubs): ").lower()
-    choice = 'subs'     # test - static input
+    choice = 'subs'     # static input - subscribe
 
     return tokens, headers, userids, choice
 
@@ -395,9 +366,102 @@ def processing_data(access_tokens, userids, ch, latest_feed_xref):
             # p1.submit(process_queue, latest_feed_xref, min_const, ltp, vol)         # process queue
 
 
-if __name__ == '__main__':
+class XtsWS:
+    close_time = today + relativedelta(hour=15, minute=35)
 
+    def __init__(self, tokens, token_xref, scrips, access_token, user_id, candle_send, start=False, name='1', **kwargs):
+        super().__init__()
+        self.tokens = tokens
+        self.scrips = scrips
+        self.token_xref = token_xref
+        self.access_token = access_token
+        self.user_id = user_id
+
+        self.executor = None  # Common context
+        self.handler = None  # Unique Every instance
+        self.candle_fut = None  # Unique Every instance
+        self.hist_flag = None  # Unique Every instance
+        self.candle_send = candle_send  # Common channel
+        self.latest_feed_xref = kwargs.get('latest_feed_xref', None)
+        self.xts_token_xref = kwargs.get('xts_token_xref', {})
+
+        self.xts_ws = socketio.Client()
+        self.xts_ws.on('connect', self.on_connect)
+        self.xts_ws.on('disconnect', self.on_disconnect)
+        self.xts_ws.on('1502-json-full', self.on_message_md)
+        self.xts_ws.on('1510-json-full', self.on_message_io)
+        # self.xts_ws.on('1105-json-partial', self.on_message_test)
+
+        self.entity_oi_xref = {}
+        self.name = f"soc_{name}"
+
+        if start:
+            self.start()
+
+    def start(self):
+        with ProcessPoolExecutor(max_workers=4) as executor:
+            if self.executor is None:
+                self.executor = executor
+
+            manager = mp.Manager()
+            self.hist_flag = manager.Event()
+            self.hist_flag.set()
+            # Pipes for data processing
+            feed_receiver, feed_send = mp.Pipe(duplex=False)
+            # Initialize Data Handler (Middleware between Broadcast and Candle)
+            self.handler = DataHandler(sender=feed_send)
+            self.handler.start_processor()
+
+            # Initialize Candle Handler
+            # noinspection PyTypeChecker
+            self.candle_fut = self.executor.submit(init_candle_creator, self.scrips, self.tokens, self.token_xref,
+                                                   feed_receiver, start=True, candle_sender=self.candle_send,
+                                                   threaded=True, hist_flag=self.hist_flag, name=self.name,
+                                                   shared_xref=self.latest_feed_xref, update_redis=True, mode='xts')
+
+            ws_url = f"{socket_url}/apimarketdata/socket.io/?token={self.access_token}&userID={self.user_id}&broadcastMode=Full&publishFormat=JSON"
+            self.xts_ws.connect(ws_url, transports='websocket', socketio_path='apimarketdata/socket.io')
+            self.xts_ws.wait()
+
+    def on_connect(self):
+        print('Connected to Socket')
+
+    def on_disconnect(self):
+        print('Disconnected from Socket')
+
+    # @socket.on('1502-json-full')  # market data
+    def on_message_md(self, raw_data):
+        data: dict = json.loads(raw_data)
+        # logger.info(data)
+
+        entity_name = self.xts_token_xref.get(data['ExchangeInstrumentID'], None)  # take entity name via exchange id
+        if entity_name:
+            data.update({'entity': entity_name, 'oi': self.entity_oi_xref.get(entity_name, None)})
+            ticks = [data]
+            self.handler.receiver(ticks)
+
+    # @socket.on('1510-json-full')  # OI data
+    def on_message_io(self, raw_data):
+        data = json.loads(raw_data)
+        # logger.info(data)
+
+        entity_name = self.xts_token_xref.get(data['ExchangeInstrumentID'], None) # take entity name via exchange id
+        if entity_name:
+            self.entity_oi_xref[entity_name] = data['OpenInterest']
+
+    # @socket.on('1105-json-partial')     # test data - unsubscribed
+    # def on_message_test(self, raw_data):
+    #     print("Received test data", raw_data)
+
+
+def xts_wrapper(*args, **kwargs):
+    try:
+        xts = XtsWS(*args, **kwargs)
+        xts.start()
+    except Exception as ec:
+        logger.error(f'Error in XTS Wrapper: {ec}')
+
+
+if __name__ == '__main__':
     pass
 
-    # xts_models.create_table()   # create database table
-    # print(get_token_header())
