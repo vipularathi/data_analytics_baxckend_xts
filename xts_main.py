@@ -1,10 +1,8 @@
 import traceback
 from threading import Thread
 from concurrent.futures import ProcessPoolExecutor
-import logging
-import os
-from time import sleep
 
+import jwt
 import numpy as np
 import requests
 import pandas as pd
@@ -16,74 +14,14 @@ from datetime import datetime, timedelta
 
 from dateutil.relativedelta import relativedelta
 
-import db_ops
+from db_ops import DBHandler
 from common import today, logger
 from data_handler import DataHandler, init_candle_creator
 
-# import xts_models
-
-# logger = logging.getLogger()
-# logger.setLevel(logging.INFO)
 
 host = "https://algozy.rathi.com:3000"
 socket_url = "wss://algozy.rathi.com:3000"
 subscription_url = f'{host}/apimarketdata/instruments/subscription'
-
-
-# print entire dataframe
-pd.set_option('display.max_rows', None)
-pd.set_option('display.max_columns', None)
-pd.set_option('display.width', None)
-pd.set_option('display.max_colwidth', None)
-
-# epoch to datetime minus 5h 30m (GMT to IST)
-epoch_to_datetime = lambda epoch_time: (datetime.fromtimestamp(epoch_time) - timedelta(hours=5, minutes=30)).time()
-
-
-class QueueProcessing:
-    def __init__(self, latest_feed_xref):
-        self.queue = latest_feed_xref
-
-    def start_processing(self):
-        th = Thread(target=self.queue_processor)
-
-        th.start()
-        th.join()
-
-    def queue_processor(self):
-        q = {}
-        while True:
-            try:
-                d = self.queue.get()
-
-                event = d['event']
-                d = json.loads(d['data'])
-                if event == 1502:
-                    d['Touchline']['LastUpdateTime'] = str(epoch_to_datetime(d['Touchline']['LastUpdateTime']))
-                    try:
-                        # check if instrument ID exists then update details, if not, add details
-                        q.setdefault(d['ExchangeInstrumentID'], {}).update({
-                            "LastUpdateTime": d['Touchline']['LastUpdateTime'],
-                            "LastTradedPrice": d['Touchline']['LastTradedPrice'],
-                            "LastTradedQunatity": d['Touchline']['LastTradedQunatity'],
-                            "TotalTradedQuantity": d['Touchline']['TotalTradedQuantity'],
-                            "TotalValueTraded": d['Touchline']['TotalValueTraded']
-                        })
-                    except:
-                        pass
-
-                if event == 1510:
-                    # check if instrument ID exists then update details, if not, add details
-                    q.setdefault(d['ExchangeInstrumentID'], {}).update({
-                        "OpenInterest": d['OpenInterest']
-                    })
-
-                # logger.warning(len(q))  # will not exceed number of symbols - 211
-                # logger.warning(q)
-                print(q)
-
-            except Exception as e:
-                print(f"error in While: {traceback.format_exc()}")
 
 
 # generate header
@@ -98,18 +36,20 @@ def gen_headers(tokens: list):
     return headers
 
 
-# test token validity - subscribe to ACC temporarily - pending
+# test token validity - check expiry date
 def test_token(token):
+    epoch_to_date = lambda epoch_time: (datetime.fromtimestamp(epoch_time) - timedelta(hours=5, minutes=30)).date()
 
-    subscription_payload = {token: create_payload([22], [1])}   # ACC for testing
-    headers = gen_headers([token])
-    status_code, status = subs(subscription_payload[token], headers[token])
-    if status_code == 200:
-        unsubs(subscription_payload[token], headers[token])
+    decoded = jwt.decode(token, options={"verify_signature": False})
+    expiry = epoch_to_date(decoded['exp'])
+
+    # if expiry is tomorrow
+    if expiry > (datetime.now()).date():
+        logger.info("Token Not Expired")
+        return 200
     else:
-        return status_code
-
-    return status_code
+        logger.info("Token Expired")
+        return 400
 
 
 def split_into_tokens(tokens: list, df):
@@ -135,7 +75,6 @@ def subscribe_init(tokens, headers, ch, df):
     status_list = []
 
     if ch == 'subs':
-        print("choice is subs")
         # subscribe symbols - for each token
         for token in tokens:
             status_code, status = subs(subscription_payload[token], headers[token])     # market data
@@ -157,9 +96,9 @@ def subscribe_init(tokens, headers, ch, df):
         if status_list[i][0] != 200:
             status_list[i][1] = json.loads(status_list[i][1])
             if status_list[i][1]["code"] == "e-session-0002":     # already subscribed
-                print(status_list[i][1]["description"], status_list[i][1]["result"])
+                logger.warn(f'{status_list[i][1]["description"]}, {status_list[i][1]["result"]}')
             else:
-                print(f"Token {i+1} error message: ", status_list[i][1])    # unknown error handling
+                logger.warn(f"Token {i+1} error message: ", status_list[i][1])  # unknown error handling
                 flag += 1
 
     if flag > 0:
@@ -234,136 +173,47 @@ def unsubs(subscription_payload, headers):
     return subscription_response.status_code, subscription_response.text
 
 
-# push market data to queue
-def push_data(token: str, userid: str, latest_feed_xref: dict, dict1: dict):
-    entity_name = None
-
-    try:
-        # check live logs by passing params -> engineio_logger=True, logger=True
-        socket = socketio.Client()
-
-        @socket.on('connect')
-        def on_connect():
-            print('Connected to Socket')
-
-        @socket.on('disconnect')
-        def on_disconnect():
-            print('Disconnected from Socket')
-            exit()
-
-        @socket.on('1502-json-full')    # market data
-        def on_message_md(data):
-            data = json.loads(data)
-
-            if data['ExchangeInstrumentID'] in dict1.keys():
-                entity_name = dict1[data['ExchangeInstrumentID']]     # take entity name from exchange id
-                print(entity_name)
-                print("data & entity: ", data['Touchline']['LastTradedPrice'], entity_name)
-                ltp = data['Touchline']['LastTradedPrice']
-
-                # latest_feed_xref.setdefault(entity_name, {}).update({
-                #     "LastTradedPrice": ltp
-                # })        # unprocessed - process into queue
-
-                latest_feed_xref[entity_name] = {
-                    "LastTradedPrice": ltp
-                }
-
-            print("Received test data: ", latest_feed_xref)     # testing
-
-        @socket.on('1510-json-full')    # OI data
-        def on_message_io(data):
-            data = json.loads(data)
-
-            if data['ExchangeInstrumentID'] in dict1.keys():
-                entity_name = dict1[data['ExchangeInstrumentID']]     # take entity name from exchange id
-                print(entity_name)
-                print("IO data: ", data['OpenInterest'])
-                oi = data['OpenInterest']
-
-                # latest_feed_xref.setdefault(entity_name, {}).update({
-                #     "OpenInterest": data['OpenInterest']
-                # })        # unprocessed - process into queue
-
-                latest_feed_xref[entity_name] = {
-                    "OpenInterest": oi
-                }
-
-        # @socket.on('1105-json-partial')     # test static data
-        # def on_message_test(data):
-        #     print("Received test data", data)
-
-        socket.connect(
-            f"{socket_url}/apimarketdata/socket.io/?token={token}&userID={userid}&broadcastMode=Full&publishFormat=JSON",
-            transports='websocket', socketio_path='apimarketdata/socket.io')
-
-        socket.wait()
-    except Exception as e:
-        print(e)
-
-
-def process_queue(latest_feed_xref):
-    try:
-        obj = QueueProcessing(latest_feed_xref)
-        obj.start_processing()
-    except Exception as e:
-        print(f"error: {e}")
-
-
 def get_token_header():
 
-    # get creds directly from db
-    creds = {'user1': {'appkey': '880cf50aaa5e4d495c1405', 'secretkey': 'Tjdk062@i1', 'userid': 'AA143'}, 'user2': {'appkey': '5c7e23fd3fff9c9cdb9126', 'secretkey': 'Aajs181$wG', 'userid': 'AA143'}}
+    creds = {}
     tokens = []
     userids = []
 
-    for user, cred in creds.items():    # read directly from DB
+    # get credentials from DB
+    res = DBHandler.get_credentials()
+    for i in range(len(res)):
 
-        # check for data in DB - found
-        if db_ops.select_creds(cred['appkey']) != 0:
+        # add to dict
+        creds.setdefault(f"user{i+1}", {}).update({
+            "appkey": str(res['appkey'][i]),
+            "secretkey": str(res['secretkey'][i]),
+            "userid": str(res['userid'][i]),
+            "token": str(res['token'][i])
+        })
 
-            # get token from DB
-            token = db_ops.select_creds(cred['appkey'])
+    logger.info(creds)
 
-            if test_token(token) == 400:
+    # iterate through all credentials
+    for user, cred in creds.items():
+        token = cred['token']
 
-                # create new token & update in the DB - no need to test the new token
-                token = create_token(cred['secretkey'], cred['appkey'])
-                db_ops.update_creds(cred['appkey'], token)
+        if test_token(token) == 400:
 
-            else:
-                print("token test successful")
-
-            # create combine dict - pending
-            tokens.append(token)
-            userids.append(cred['userid'])
-
-        # data not found
-        else:
-            # generate token and insert in the DB
+            # create new token & update in the DB - no need to test the new token
             token = create_token(cred['secretkey'], cred['appkey'])
-            db_ops.insert_creds(cred['appkey'], cred['secretkey'], cred['userid'], token)
+            DBHandler.update_credentials(cred['appkey'], token)
 
+        else:
+            logger.info("token test successful")
+
+        # create combine dict - pending
         tokens.append(token)
+        userids.append(cred['userid'])
 
     headers = gen_headers(tokens)
-    # choice = input("Subscribe / Unsubscribe (subs/unsubs): ").lower()
     choice = 'subs'     # static input - subscribe
 
     return tokens, headers, userids, choice
-
-
-# we process the common dict here
-def processing_data(access_tokens, userids, ch, latest_feed_xref):
-
-    if ch == 'subs':
-        with ProcessPoolExecutor(max_workers=4) as p1:
-            # context = mp.Manager()
-            # queue = context.Queue()
-
-            for i in range(len(access_tokens)):
-                p1.submit(push_data, access_tokens[i], userids[i], latest_feed_xref)  # push data in queue for each token
-            # p1.submit(process_queue, latest_feed_xref, min_const, ltp, vol)         # process queue
 
 
 class XtsWS:
@@ -424,17 +274,17 @@ class XtsWS:
             self.xts_ws.wait()
 
     def on_connect(self):
-        print('Connected to Socket')
+        logger.info("Connected to Socket")
 
     def on_disconnect(self):
-        print('Disconnected from Socket')
+        logger.info("Disconnected from Socket")
 
     # @socket.on('1502-json-full')  # market data
     def on_message_md(self, raw_data):
         data: dict = json.loads(raw_data)
         # logger.info(data)
 
-        entity_name = self.xts_token_xref.get(data['ExchangeInstrumentID'], None)  # take entity name via exchange id
+        entity_name = self.xts_token_xref.get(data['ExchangeInstrumentID'], None)  # get entity name via exchange id
         if entity_name:
             data.update({'entity': entity_name, 'oi': self.entity_oi_xref.get(entity_name, None)})
             ticks = [data]

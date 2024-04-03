@@ -110,74 +110,6 @@ def read_sql_df(query, params=None, commit=False):
     return df
 
 
-# insert query - credentials    # remove pool
-def insert_creds(appkey, secretkey, userid, token, commit=False):
-
-    with pool.connect() as conn:
-
-        insert_query = insert(s_tbl_creds).values(
-            appkey=appkey,
-            secretkey=secretkey,
-            userid=userid,
-            token=token
-        )
-
-        # print("insert_query: ", insert_query)
-        conn.execute(insert_query)
-        if commit:
-            conn.execute('commit')
-        conn.close()
-
-        print("token inserted in DB")
-
-
-# select query - credentials
-def select_creds():
-    with pool.connect() as conn:
-
-        select_query = select(s_tbl_creds).where(s_tbl_creds.c.status == 'active')
-        res = conn.execute(select_query).fetchall()
-        conn.close()
-        if len(res) == 0:       # not found
-            return 0
-
-        res = res[0]    # found
-        return res[1], res[2], res[3], res[4]       # appkey, secretkey, userid, token
-
-
-# select query - credentials - token
-def get_token(appkey):
-    with pool.connect() as conn:
-
-        select_query = select(s_tbl_creds).where(s_tbl_creds.c.appkey == appkey)
-        res = conn.execute(select_query).fetchall()
-        conn.close()
-        if len(res) == 0:       # not found
-            return 0
-
-        res = res[0]    # found
-        return res[4]       # token
-
-
-def update_creds(appkey: str, new_token: str, commit=False):
-    if select_creds(appkey) != 0:
-        with pool.connect() as conn:
-
-            update_query = s_tbl_creds.update().where(s_tbl_creds.c.appkey == appkey).values(token=new_token)
-
-            print("update_query: ", update_query)
-            conn.execute(update_query)
-            if commit:
-                conn.execute('commit')
-            conn.close()
-
-            print("updated successfully")
-
-    else:
-        print("record not found")
-
-
-
 class DBHandler:
 
     """
@@ -230,3 +162,24 @@ class DBHandler:
             """
         df = read_sql_df(query, params={'symbol': symbol, 'expiry': expiry})
         return df
+
+    @classmethod
+    def get_credentials(cls):
+        query = f"""
+                SELECT * FROM {s_tbl_creds} WHERE status = 'active'
+            """
+        df = read_sql_df(query)
+        return df
+
+    @classmethod
+    def insert_credentials(cls, db_data):
+        insert_data(s_tbl_creds, db_data, ignore=True)
+
+    @classmethod
+    def update_credentials(cls, appkey, new_token):
+        update_query = f"""
+                        UPDATE creds SET token = '{new_token}' WHERE appkey = '{appkey}'
+                    """
+        result = execute_query(update_query)
+        logger.info(result)
+

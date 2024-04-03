@@ -15,7 +15,7 @@ import xts_main
 
 def main():
     choice = str(input("Enter broker(zerodha/XTS): ")).lower()
-    # choice = "xts"  # testing - static input
+
     workers = max(os.cpu_count(), 4)
     logger.info(f'Max workers: {workers}. Main Pid: {os.getpid()}')
 
@@ -53,8 +53,9 @@ def main():
             xts_token_xref = ins_df.set_index('exchange_token')['tradingsymbol'].to_dict()
             if ch == 'subs':
                 for i in range(len(access_tokens)):
+                    # push data for each token
                     executor.submit(xts_main.xts_wrapper, tokens, token_xref, [], access_tokens[i], userids[i], candle_send,
-                                    latest_feed_xref=latest_feed_xref, xts_token_xref=xts_token_xref)  # push data for each token
+                                    latest_feed_xref=latest_feed_xref, xts_token_xref=xts_token_xref)
 
         else:
             # noinspection PyTypeChecker
