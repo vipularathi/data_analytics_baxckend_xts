@@ -38,18 +38,15 @@ def gen_headers(tokens: list):
 
 # test token validity - check expiry date
 def test_token(token):
-    epoch_to_date = lambda epoch_time: (datetime.fromtimestamp(epoch_time) - timedelta(hours=5, minutes=30)).date()
+    head = {"Authorization": token}
+    response = requests.get(f"{host}/apimarketdata/config/clientConfig", headers=head)
 
-    decoded = jwt.decode(token, options={"verify_signature": False})
-    expiry = epoch_to_date(decoded['exp'])
-
-    # if expiry is tomorrow
-    if expiry > (datetime.now()).date():
+    if response.status_code == 200:
         logger.info("Token Not Expired")
-        return 200
     else:
         logger.info("Token Expired")
-        return 400
+
+    return response.status_code
 
 
 def split_into_tokens(tokens: list, df):
@@ -190,8 +187,6 @@ def get_token_header():
             "userid": str(res['userid'][i]),
             "token": str(res['token'][i])
         })
-
-    logger.info(creds)
 
     # iterate through all credentials
     for user, cred in creds.items():
