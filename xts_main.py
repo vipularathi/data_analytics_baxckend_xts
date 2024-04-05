@@ -1,6 +1,7 @@
 import traceback
 from threading import Thread
 from concurrent.futures import ProcessPoolExecutor
+from time import sleep
 
 import jwt
 import numpy as np
@@ -178,6 +179,8 @@ def get_token_header():
 
     # get credentials from DB
     res = DBHandler.get_credentials()
+    if len(res) == 0:
+        raise RuntimeError('No XTS credentials available for connection')
     for i in range(len(res)):
 
         # add to dict
@@ -230,9 +233,10 @@ class XtsWS:
         self.latest_feed_xref = kwargs.get('latest_feed_xref', None)
         self.xts_token_xref = kwargs.get('xts_token_xref', {})
 
-        self.xts_ws = socketio.Client()
+        self.xts_ws = socketio.Client(request_timeout=120, logger=False, engineio_logger=False, ssl_verify=False)
         self.xts_ws.on('connect', self.on_connect)
         self.xts_ws.on('disconnect', self.on_disconnect)
+        self.xts_ws.on('error', self.on_error)
         self.xts_ws.on('1502-json-full', self.on_message_md)
         self.xts_ws.on('1510-json-full', self.on_message_io)
         # self.xts_ws.on('1105-json-partial', self.on_message_test)
@@ -268,11 +272,18 @@ class XtsWS:
             self.xts_ws.connect(ws_url, transports='websocket', socketio_path='apimarketdata/socket.io')
             self.xts_ws.wait()
 
+            while True:
+                logger.info("Non-waiting state")
+                sleep(30)
+
     def on_connect(self):
         logger.info("Connected to Socket")
 
     def on_disconnect(self):
         logger.info("Disconnected from Socket")
+
+    def on_error(self, data):
+        logger.info(f"Error from Socket: {data}")
 
     # @socket.on('1502-json-full')  # market data
     def on_message_md(self, raw_data):
@@ -305,6 +316,7 @@ def xts_wrapper(*args, **kwargs):
         xts.start()
     except Exception as ec:
         logger.error(f'Error in XTS Wrapper: {ec}')
+    logger.error("XTS wrapper exits")
 
 
 if __name__ == '__main__':

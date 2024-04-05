@@ -21,7 +21,7 @@ def main():
 
     with ProcessPoolExecutor(max_workers=workers, mp_context=get_context('spawn')) as executor:
         if choice == "xts":
-            access_tokens, headers, userids, ch = xts_main.get_token_header() # connection to XTS - return access tokens, headers, userid, choice(subs/unsubs)
+            access_tokens, headers, userids, ch = xts_main.get_token_header()  # connection to XTS - return access tokens, headers, userid, choice(subs/unsubs)
 
         else:
             client = initiate_session()     # connection to zerodha kite
