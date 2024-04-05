@@ -1,23 +1,18 @@
-import traceback
-from threading import Thread
+import json
+import multiprocessing as mp
 from concurrent.futures import ProcessPoolExecutor
 from time import sleep
 
-import jwt
 import numpy as np
 import requests
-import pandas as pd
 import socketio
-import json
-import multiprocessing as mp
-# from multiprocessing import Manager
-from datetime import datetime, timedelta
-
 from dateutil.relativedelta import relativedelta
 
-from db_ops import DBHandler
 from common import today, logger
 from data_handler import DataHandler, init_candle_creator
+from db_ops import DBHandler
+
+# from multiprocessing import Manager
 
 
 host = "https://algozy.rathi.com:3000"

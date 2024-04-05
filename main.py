@@ -3,14 +3,11 @@ from concurrent.futures import ProcessPoolExecutor
 from multiprocessing import get_context, Manager, Pipe
 from time import sleep
 
+import xts_main
 from analysis import start_analysis
 from common import logger
 from contracts import get_req_contracts
-from feed import connect_socket
-from xts_connect import socket_url, access_token, subscribe_index, user_id, login
 from zerodha import initiate_session, zws_wrapper
-import pandas as pd
-import xts_main
 
 
 def main():
