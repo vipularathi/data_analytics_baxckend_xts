@@ -1,5 +1,6 @@
 import os
 from datetime import datetime, timedelta
+from io import StringIO
 import pandas as pd
 import numpy as np
 import requests
@@ -12,9 +13,12 @@ NSEFO_fut_head_str = "ExchangeSegment|ExchangeInstrumentID|InstrumentType|Name|D
 NSEFO_opt_head_str = "ExchangeSegment|ExchangeInstrumentID|InstrumentType|Name|Description|Series|NameWithSeries|InstrumentID|PriceBand.High|PriceBand.Low|FreezeQty|TickSize|LotSize|Multiplier|UnderlyingInstrumentId|UnderlyingIndexName|ContractExpiration|StrikePrice|OptionType|DisplayName|PriceNumerator|pricedenominotor|FullDescription"
 
 
-def contracts_master(payload):
-    head = {"Content-Type": "application/json"}
+def contracts_df(payload):
+    """
+    get response and create dataframe
+    """
 
+    head = {"Content-Type": "application/json"}
     response = requests.post(
         "https://algozy.rathi.com:3000/apimarketdata/instruments/master",
         headers=head,
@@ -26,28 +30,35 @@ def contracts_master(payload):
     if not os.path.exists('entity_data'):
         os.makedirs('entity_data')
 
+    df = None
     # csv for each exchange
     for exchange in payload["exchangeSegmentList"]:
         if exchange == 'NSECM':
-            with open(f"entity_data/{exchange}.csv", "w") as file:
-                file.write((data['result']).replace("|", ","))
+            file1 = StringIO((data['result']).replace("|", ","))
+            df = pd.read_csv(file1)
         elif exchange == 'NSEFO':
-            with open(f"entity_data/{exchange}.csv", "w") as file:
-                file.write((data['result']).replace("|", ","))
+            file2 = StringIO((data['result']).replace("|", ","))
+            df = pd.read_csv(file2, names=range(23), low_memory=False)  # low_memory: avoid warning in console
+
+    return df
 
 
-def csv_operation(payload: dict, exchanges: list, force: bool):
+def create_csv(payload: dict, exchanges: list):
+    """
+    create payload, assign headers and generate csv from response.
+    """
+    df = {}
     for i in exchanges:
         payload['exchangeSegmentList'] = [i]
-        contracts_master(payload)
+        df[i] = contracts_df(payload)
 
     NSEFO_fut_head = NSEFO_fut_head_str.split("|")  # list of column headers
     NSEFO_opt_head = NSEFO_opt_head_str.split("|")  # list of column headers
     NSECM_head = NSECM_head_str.split("|")  # list of column headers
 
-    df1 = pd.read_csv('entity_data/NSECM.csv')
-    df1.columns = NSECM_head + ["unknown-1", "unknown-2", "unknown-3"]     # 3 unknown columns
-    df2 = pd.read_csv('entity_data/NSEFO.csv', names=range(23))
+    df1 = df['NSECM']
+    df1.columns = NSECM_head + ["unknown-1", "unknown-2", "unknown-3"]  # 3 unknown columns
+    df2 = df['NSEFO']
 
     fut_list = ["FUTSTK", "FUTIDX"]
     opt_list = ["OPTSTK", "OPTIDX"]
@@ -63,25 +74,35 @@ def csv_operation(payload: dict, exchanges: list, force: bool):
     options = df2_opt
     options.columns = NSEFO_opt_head
 
-    # FO-fut + FO-opt + CM
+    # CM + FO-fut + FO-opt
     df_fo = pd.concat([df1, futures, options], ignore_index=True, sort=False)
+    df_fo.to_csv("entity_data/Instruments_xts.csv", index=False)
+    logger.info("Instrument csv created")
 
-    # remove temp files
-    os.remove("entity_data/NSECM.csv")
-    os.remove("entity_data/NSEFO.csv")
+
+def csv_operations(payload: dict, exchanges: list, force: bool):
+    """
+    check if csv generated for today. if not, generate.
+    """
+    date_mismatch = False
+    exists = True
 
     # check csv exists
     if os.path.exists("entity_data/Instruments_xts.csv"):
         modified_time = epoch_to_datetime(os.path.getmtime("entity_data/Instruments_xts.csv"))
         if modified_time.date() == (datetime.now()).date():
-            logger.info("csv already created today!!")
-            if force:
-                df_fo.to_csv("entity_data/Instruments_xts.csv", index=False)
-                logger.info("csv created!!")
+            logger.info("Instrument csv already created today.")
+            if not force:
+                logger.info("csv generation aborting!!")
+        else:
+            logger.info("Instrument csv not created today.")
+            date_mismatch = True
     else:
-        logger.info("csv already created today!!")
-        df_fo.to_csv("entity_data/Instruments_xts.csv", index=False)
-        logger.info("csv already created today!!")
+        logger.info("Instrument csv not found.")
+        exists = False
+
+    if force or date_mismatch or (not exists):
+        create_csv(payload, exchanges)
 
 
 if __name__ == '__main__':
@@ -90,4 +111,4 @@ if __name__ == '__main__':
     exchanges = ['NSECM', 'NSEFO']
 
     force = False     # do not force create csv
-    csv_operation(payload, exchanges, force)
+    csv_operations(payload, exchanges, force)
