@@ -63,6 +63,10 @@ def create_csv(payload: dict, exchanges: list):
     fut_list = ["FUTSTK", "FUTIDX"]
     opt_list = ["OPTSTK", "OPTIDX"]
 
+    # replace UnderlyingIndexName values
+    di = {"Nifty 50": "NIFTY", "Nifty Fin Service": "FINNIFTY", "Nifty Bank": "BANKNIFTY", "NIFTY MID SELECT": "MIDCPNIFTY"}
+    df2[15] = df2[15].apply(lambda x: di.get(x) if di.get(x, None) is not None else x)
+
     df2_fut = df2[df2[5].isin(fut_list)]
     df2_opt = df2[df2[5].isin(opt_list)]
 
