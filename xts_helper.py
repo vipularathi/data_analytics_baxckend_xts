@@ -63,10 +63,6 @@ def create_csv(payload: dict, exchanges: list):
     fut_list = ["FUTSTK", "FUTIDX"]
     opt_list = ["OPTSTK", "OPTIDX"]
 
-    # replace UnderlyingIndexName values
-    di = {"Nifty 50": "NIFTY", "Nifty Fin Service": "FINNIFTY", "Nifty Bank": "BANKNIFTY", "NIFTY MID SELECT": "MIDCPNIFTY"}
-    df2[15] = df2[15].apply(lambda x: di.get(x) if di.get(x, None) is not None else x)
-
     df2_fut = df2[df2[5].isin(fut_list)]
     df2_opt = df2[df2[5].isin(opt_list)]
 
@@ -80,6 +76,11 @@ def create_csv(payload: dict, exchanges: list):
 
     # CM + FO-fut + FO-opt
     df_fo = pd.concat([df1, futures, options], ignore_index=True, sort=False)
+
+    # replace UnderlyingIndexName values
+    di = {"Nifty 50": "NIFTY", "Nifty Fin Service": "FINNIFTY", "Nifty Bank": "BANKNIFTY", "NIFTY MID SELECT": "MIDCPNIFTY"}
+    df_fo['UnderlyingIndexName'] = df_fo['UnderlyingIndexName'].apply(lambda x: di.get(x, x))
+
     df_fo.to_csv("entity_data/Instruments_xts.csv", index=False)
     logger.info("Instrument csv created")
 
