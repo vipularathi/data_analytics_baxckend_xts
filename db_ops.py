@@ -5,10 +5,11 @@ from time import time, sleep
 import sqlalchemy as sql
 import sqlalchemy.exc as sql_exec
 import pandas as pd
+from sqlalchemy import insert, select
 
 from common import logger, today
 from db_config import engine_str, use_sqlite, s_tbl_snap, n_tbl_snap, s_tbl_opt_greeks, s_tbl_opt_straddle, \
-    n_tbl_opt_straddle
+    n_tbl_opt_straddle, s_tbl_creds
 
 execute_retry = True
 pool = sql.create_engine(engine_str, pool_size=10, max_overflow=5, pool_recycle=67, pool_timeout=30, echo=None)
@@ -74,7 +75,7 @@ def execute_query(query, retry=2, wait_period=5, params=None):
     if params is None:
         params = {}
     st = time()
-    short_query = query[:int(len(query)*0.25)]
+    short_query = query[:int(len(query)*0.25)] if type(query) is str else ''
     # logger.debug(f'Executing query...{short_query}...')
     # engine = sql.create_engine(engine_str)
     try:
@@ -161,3 +162,24 @@ class DBHandler:
             """
         df = read_sql_df(query, params={'symbol': symbol, 'expiry': expiry})
         return df
+
+    @classmethod
+    def get_credentials(cls):
+        query = f"""
+                SELECT * FROM {s_tbl_creds} WHERE status = 'active'
+            """
+        df = read_sql_df(query)
+        return df
+
+    @classmethod
+    def insert_credentials(cls, db_data):
+        insert_data(s_tbl_creds, db_data, ignore=True)
+
+    @classmethod
+    def update_credentials(cls, appkey, new_token):
+        update_query = f"""
+                        UPDATE creds SET token = '{new_token}' WHERE appkey = '{appkey}'
+                    """
+        result = execute_query(update_query)
+        logger.info(result)
+

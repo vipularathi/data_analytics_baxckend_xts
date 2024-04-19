@@ -85,6 +85,17 @@ s_tbl_opt_straddle = Table(
     UniqueConstraint('timestamp', 'underlying', 'expiry', 'strike', name=f'uq_{n_tbl_opt_straddle}_record')
 )
 
+n_tbl_creds = 'creds'
+s_tbl_creds = Table(
+    n_tbl_creds, metadata,
+    Column('id', Integer, primary_key=True, autoincrement=True),
+    Column('appkey', VARCHAR(50), nullable=True),
+    Column('secretkey', VARCHAR(50), nullable=True),
+    Column('userid', VARCHAR(50), nullable=True),
+    Column('token', VARCHAR(255), nullable=True),
+    Column('status', VARCHAR(20), nullable=True)
+)
+
 # Last and after all table declarations
 # noinspection PyUnboundLocalVariable
 meta_engine = sql.create_engine(engine_str)

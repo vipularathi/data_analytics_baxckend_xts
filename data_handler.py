@@ -1,4 +1,5 @@
 import traceback
+from datetime import datetime, timedelta
 from functools import cached_property
 from queue import Queue
 from threading import Thread
@@ -7,6 +8,9 @@ from time import sleep
 import psutil
 
 from common import logger
+
+
+epoch_to_datetime = lambda epoch_time: datetime.combine(datetime.today().date(), (datetime.fromtimestamp(epoch_time) - timedelta(hours=5, minutes=30)).time())
 
 
 class DataHandler:
@@ -73,10 +77,12 @@ class CandleCreator:
         self.receiver = receiver
         self.tokens = tokens
         self.token_xref = token_xref  # token -> entity
+        self.entity_xref = {_v: _k for _k, _v in token_xref.items()}  # entity -> token
         self.entities = list(self.token_xref.values())
         self.scrip_xref = {_scrip.entity: _scrip for _scrip in self.scrips}
         self.shared_xref = kwargs.get('shared_xref', {})
         self.name = kwargs.get('name', 'sock')
+        self.mode = kwargs.get('mode', 'zerodha')
 
         self.candle_sender = kwargs.get('c_sender', None)
         self.daemon = kwargs.get('threaded', False)
@@ -147,9 +153,9 @@ class CandleCreator:
                     # logger.info(f'Candle Creator: {len(_feed)}')
                     if len(_feed) > 0:
                         for _e_feed in _feed:
-                            _data = self._extract_feed_v4(_e_feed)
+                            _data, _xref_dict = self._extract_connector_feed(_e_feed)
                             # self._ltp_queue.put(_data)
-                            self._update_shared_xref(_e_feed)
+                            self._update_shared_xref(_xref_dict)
                         # logger.info(self.shared_xref.copy())
                 else:
                     sleep(0.07)
@@ -158,6 +164,15 @@ class CandleCreator:
                     break
             except Exception as exc:
                 logger.error(f'Error while processing feed: {exc}')
+
+    def _extract_connector_feed(self, entity_feed):
+        if self.mode == 'zerodha':
+            return self._extract_feed_v4(entity_feed)
+        elif self.mode == 'xts':
+            return self._extract_feed_xts(entity_feed)
+        else:
+            logger.error('feed mode not understood')
+            return [], {}
 
     def _extract_feed_v4(self, entity_feed):
         keys = entity_feed.keys()
@@ -171,7 +186,20 @@ class CandleCreator:
                  'ts': int(entity_feed['exchange_timestamp'].timestamp() * 1000)}
                 ]
 
-        return feed
+        return feed, entity_feed
+
+    def _extract_feed_xts(self, entity_feed):
+        # logger.info(f"extract {entity_feed}")
+        # {'MessageCode': 1502, 'MessageVersion': 4, 'ApplicationType': 0, 'TokenID': 0, 'ExchangeSegment': 2, 'ExchangeInstrumentID': 68094, 'ExchangeTimeStamp': 1396448201, 'Bids': [{'Size': 250, 'Price': 518, 'TotalOrders': 2, 'BuyBackMarketMaker': 0}, {'Size': 450, 'Price': 517.95, 'TotalOrders': 2, 'BuyBackMarketMaker': 0}, {'Size': 100, 'Price': 517.9, 'TotalOrders': 1, 'BuyBackMarketMaker': 0}, {'Size': 50, 'Price': 517.85, 'TotalOrders': 1, 'BuyBackMarketMaker': 0}, {'Size': 500, 'Price': 517.8, 'TotalOrders': 3, 'BuyBackMarketMaker': 0}], 'Asks': [{'Size': 100, 'Price': 519.5, 'TotalOrders': 1, 'BuyBackMarketMaker': 0}, {'Size': 700, 'Price': 519.55, 'TotalOrders': 2, 'BuyBackMarketMaker': 0}, {'Size': 250, 'Price': 519.6, 'TotalOrders': 2, 'BuyBackMarketMaker': 0}, {'Size': 400, 'Price': 519.65, 'TotalOrders': 1, 'BuyBackMarketMaker': 0}, {'Size': 100, 'Price': 519.7, 'TotalOrders': 1, 'BuyBackMarketMaker': 0}], 'Touchline': {'BidInfo': {'Size': 250, 'Price': 518, 'TotalOrders': 2, 'BuyBackMarketMaker': 0}, 'AskInfo': {'Size': 100, 'Price': 519.5, 'TotalOrders': 1, 'BuyBackMarketMaker': 0}, 'LastTradedPrice': 518.75, 'LastTradedQunatity': 50, 'TotalBuyQuantity': 28750, 'TotalSellQuantity': 30300, 'TotalTradedQuantity': 353500, 'AverageTradedPrice': 534.55, 'LastTradedTime': 1396448190, 'LastUpdateTime': 1396448201, 'PercentChange': 8.775424617320194, 'Open': 456.9, 'High': 568.45, 'Low': 456.9, 'Close': 476.9, 'TotalValueTraded': None, 'BuyBackTotalBuy': 0, 'BuyBackTotalSell': 0}, 'BookType': 1, 'XMarketType': 1, 'SequenceNumber': 1341194566648050, 'entity': 'NIFTY24APR22200CE', 'oi': None}
+        touchline = entity_feed.get('Touchline', {})
+        ins_token = self.entity_xref[entity_feed['entity']]
+        feed = [epoch_to_datetime(entity_feed['ExchangeTimeStamp']).strftime(self.key_fmt),
+                ins_token, touchline['LastTradedPrice'],
+                touchline.get('LastTradedQunatity', 0), touchline.get('TotalTradedQuantity', 0),
+                entity_feed.get('oi', 0), {'prev_close': None, 'chg': None, 'ts': None}]
+        xref = {'instrument_token': ins_token, 'last_price': feed[2], 'oi': feed[5]}
+        # logger.info(f"extracted {feed}")
+        return feed, xref
 
     def _update_shared_xref(self, feed):
         self.shared_xref[self.token_xref[feed['instrument_token']]] = feed
