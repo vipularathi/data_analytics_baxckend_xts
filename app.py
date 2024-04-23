@@ -42,7 +42,7 @@ class ServiceApp:
             ins_df, tokens, token_xref = get_req_contracts()
             ins_df['expiry'] = ins_df['expiry'].dt.strftime('%Y-%m-%d')
             agg = ins_df[ins_df['instrument_type'].isin(['CE', 'PE'])].groupby(['name'], as_index=False).agg({'expiry': set, 'tradingsymbol': 'count'})
-            agg['expiry'] = agg['expiry'].apply(list)
+            agg['expiry'] = agg['expiry'].apply(lambda x: sorted(list(x)))
             self.symbol_expiry_map = agg.to_dict('records')
         return self.symbol_expiry_map
 
