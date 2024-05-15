@@ -5,16 +5,69 @@ from time import sleep
 
 import numpy as np
 import pandas as pd
+import py_vollib.black_scholes_merton.implied_volatility as bcm_iv
 import pytz
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from colorama import Style, Fore
 from dateutil.relativedelta import relativedelta
 
-from common import logger, today
+from common import logger, today, holidays
 from contracts import get_req_contracts
 from db_ops import DBHandler
 from greeks import get_greeks_intraday
+
+
+def network_days(start: str, end: str, holidays_arr: list):
+    b_days = pd.bdate_range(start=start, end=end, freq='C', weekmask='1111100', holidays=holidays_arr)
+    b_days = b_days.tolist()
+    b_days = [day + relativedelta(hour=15, minute=30, second=0, microsecond=0) for day in b_days]
+    return len(b_days)
+
+
+def diff_dt_num(dt1, dt2):
+    hourly_diff = (dt1 - dt2).total_seconds() / 3600    # hourly diff - total seconds in dt / 3600 seconds in 1 hour
+    time_diff_num = hourly_diff / 24         # day difference - hourly diff / 24 hrs in a day
+    return time_diff_num                    # return numeric diff
+
+
+def calc_dte(date_range):
+
+    dte = [0 for _ in date_range]
+    dates = []
+    for i in range(len(date_range)):
+        if i == 0:
+            dte[i] = 0.0
+        elif i == 1:
+            dte[i] = max(diff_dt_num(dt1=date_range[i], dt2=date_range[i-1]) / 6.25 * 24, 0)
+        else:
+            dte[i] = max(network_days(start=date_range[1], end=date_range[i], holidays_arr=holidays) - 1 + dte[1],
+                         network_days(start=date_range[1], end=date_range[i], holidays_arr=holidays) - 1)
+        dates.append(date_range[i])
+
+    dte = pd.DataFrame({'date': dates, 'dte': dte})
+    return dte
+
+
+def get_dte(row: pd.Series, dt):
+    current_dt = [dt, dt.date() + relativedelta(hour=15, minute=30, second=0, microsecond=0)]  # static
+    after_current_dt = pd.date_range(start=dt.date(), end=row['expiry'].date()).tolist()
+    after_current_dt = [(date + relativedelta(hour=15, minute=30, second=0, microsecond=0)).to_pydatetime() for date in
+                        after_current_dt]
+    date_range = pd.Series(current_dt + after_current_dt)
+    dte_all = calc_dte(date_range=date_range)
+    dte = dte_all['dte'].iloc[-1]
+    return dte
+
+
+def get_greeks_dte(spot, strike, premium, dte, opt, r=0, q=0):
+    t = dte / 365
+    flag = str(opt)[:1].lower()
+    try:
+        iv = bcm_iv.implied_volatility(premium, spot, strike, t, r, q, flag) * 100
+    except (bcm_iv.PriceIsBelowIntrinsic, bcm_iv.PriceIsAboveMaximum, Exception):
+        iv = None
+    return iv
 
 
 class SnapAnalysis:
@@ -104,9 +157,9 @@ class SnapAnalysis:
         return st
 
     @staticmethod
-    def mround_strike(row):
+    def mround_strike(row, price_col='current'):
         """Similar to excel mround function"""
-        price = row['current']
+        price = row[price_col]
         strikes = pd.Series(row['strike'])
         strikes = strikes.drop_duplicates().sort_values()
         base = (strikes[1:] - strikes.shift(1)[:-1]).min()
@@ -159,6 +212,13 @@ class SnapAnalysis:
             lambda x: pd.Series(get_greeks_intraday(x['spot'], x['strike'], x['expiry'], x['opt'], x['ltp'], dt,
                                                     risk_free_rate=self.rate / 100)),
             axis=1)
+        # Recalculate IV
+        exp_df = opt_df.groupby(['underlying', 'expiry']).count()['strike'].reset_index().drop(columns=['strike'])
+        exp_df['dte'] = exp_df.apply(get_dte, axis=1, dt=dt.replace(tzinfo=None))
+        opt_df = opt_df.merge(exp_df, on=['underlying', 'expiry'])
+        dte_iv = opt_df.apply(lambda x: get_greeks_dte(x['spot'], x['strike'], x['ltp'], x['dte'], x['opt']), axis=1)
+        greeks['iv'] = dte_iv
+
         df = opt_df.join(greeks)
         df.insert(0, 'timestamp', dt)
         if self.insert:
@@ -175,7 +235,14 @@ class SnapAnalysis:
         non_zero = (oc_df['ltp_c'] != 0) & (oc_df['ltp_p'] != 0)
         oc_df.loc[non_zero, 'combined_premium'] = (oc_df['ltp_c'] + oc_df['ltp_p'])[non_zero]
         oc_df.loc[non_zero, 'combined_iv'] = (oc_df[['iv_c', 'iv_p']].mean(axis=1))[non_zero]
-        call_otm = oc_df['strike'] >= oc_df['spot_c']
+        # ATM calc
+        # call_otm = oc_df['strike'] >= oc_df['spot_c']
+        atm_df = oc_df.groupby(['underlying', 'expiry', 'spot_c'], as_index=False).agg({'strike': list})
+        atm_df['implied_atm'] = atm_df.apply(self.mround_strike, axis=1, price_col='spot_c')
+        atm_df = atm_df[['underlying', 'expiry', 'implied_atm']].copy()
+        oc_df = oc_df.merge(atm_df, on=['underlying', 'expiry'])  # map atm
+        call_otm = oc_df['strike'] > oc_df['implied_atm']
+        # OTM IV
         oc_df['otm_iv'] = np.where(call_otm, oc_df['iv_c'].values, oc_df['iv_p'].values)
         min_combined = oc_df.groupby(['timestamp', 'underlying', 'expiry'], as_index=False).agg({'combined_premium': 'min'})
         min_combined['minima'] = True
