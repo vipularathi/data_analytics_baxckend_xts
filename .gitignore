@@ -9,4 +9,5 @@ venv
 *.ipynb
 extra
 *.csv
-*.whl
+data
+__pycache__
