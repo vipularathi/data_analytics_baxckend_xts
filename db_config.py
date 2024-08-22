@@ -2,7 +2,7 @@ from datetime import datetime
 
 import sqlalchemy as sql
 from sqlalchemy import MetaData, Table, Column, Integer, DateTime, DECIMAL, VARCHAR, TEXT, Index, UniqueConstraint, \
-    func, BOOLEAN, create_engine, Date, ForeignKey, Enum, Time, Float
+    func, BOOLEAN, create_engine, Date, ForeignKey, Enum, Time, Float, text
 from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP
 
 from common import today
@@ -14,8 +14,8 @@ rdbms_type = 'postgres'
 # db_name = f'data_{today.strftime(dt_fmt_1)}'
 db_name = f'data_arathi'
 pg_user = 'postgres'
-pg_pass = 'E6ymrG80or51s7y'
-pg_host = 'localhost'
+pg_pass = 'root'
+pg_host = '172.16.47.81'
 engine_str = f"postgresql+psycopg2://{pg_user}:{pg_pass}@{pg_host}:5432/{db_name}"
 temp_engine_str = f"postgresql+psycopg2://{pg_user}:{pg_pass}@{pg_host}:5432"
 with create_engine(temp_engine_str, isolation_level='AUTOCOMMIT').connect() as conn:
@@ -83,6 +83,29 @@ s_tbl_opt_straddle = Table(
     Column('otm_iv', Float),
     Column('minima', BOOLEAN),
     UniqueConstraint('timestamp', 'underlying', 'expiry', 'strike', name=f'uq_{n_tbl_opt_straddle}_record')
+)
+
+n_tbl_chart_users = 'chart_users'
+s_tbl_chart_users = Table(
+    n_tbl_chart_users, metadata,
+    Column('id', Integer, primary_key=True, autoincrement=True),
+    Column('email', VARCHAR(50), nullable=False),
+    Column('password', VARCHAR(50), nullable=False),
+    UniqueConstraint('email', 'password', name=f'uq_{n_tbl_chart_users}_record')
+)
+
+n_tbl_master = 'xts_master'
+s_tbl_master = Table(
+    n_tbl_master, metadata,
+    Column('scripcode', Integer),
+    Column('exchange', Integer),
+    Column('symbol', VARCHAR(50), nullable=False),
+    Column('name', VARCHAR(50), nullable=False),
+    Column('opt', VARCHAR(20)),
+    Column('expiry', Date, nullable=False),
+    Column('strike', Float),
+    Column('opt_type', VARCHAR(20)),
+    UniqueConstraint('symbol','name','expiry', name=f'uq_{n_tbl_master}_record')
 )
 
 n_tbl_creds = 'creds'

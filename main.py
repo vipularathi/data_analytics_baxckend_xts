@@ -2,7 +2,7 @@ import os
 from concurrent.futures import ProcessPoolExecutor
 from multiprocessing import get_context, Manager, Pipe
 from time import sleep
-
+from datetime import datetime
 import xts_main
 from analysis import start_analysis
 from common import logger
@@ -13,7 +13,7 @@ from zerodha import initiate_session, zws_wrapper
 def main():
     choice = str(input("Enter broker(zerodha/XTS): ")).lower()
 
-    workers = max(os.cpu_count(), 4)
+    workers = max(os.cpu_count(), 6)
     logger.info(f'Max workers: {workers}. Main Pid: {os.getpid()}')
 
     with ProcessPoolExecutor(max_workers=workers, mp_context=get_context('spawn')) as executor:

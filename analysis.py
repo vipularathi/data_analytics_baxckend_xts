@@ -139,7 +139,7 @@ class SnapAnalysis:
     def run_analysis(self, calc=True):
         dt = datetime.now(tz=pytz.timezone('Asia/Kolkata')).replace(microsecond=0)
         xref = self.shared_xref.copy()
-        logger.info(len(xref))
+        logger.info(f'length of xref is {len(xref)}')
         data = {'timestamp': dt.isoformat(), 'snap': xref}
         db_data = json.loads(json.dumps(data, default=str))
         if self.insert:
@@ -193,7 +193,12 @@ class SnapAnalysis:
             underlyings = opt_df.groupby(['underlying', 'expiry'], as_index=False).agg({'strike': list})
             underlyings['current'] = underlyings['underlying'].apply(lambda x: self.get_ltp(self.fut_map.get(x, x), snap))
             underlyings.dropna(subset=['current'], inplace=True)
+
+            logger.info(f"\nBefore apply: {underlyings.shape}")
+            # logger.info(f"\nBefore apply strike is: \n{underlyings['strike']}")
             underlyings['strike'] = underlyings.apply(self.mround_strike, axis=1)
+            logger.info(f"After apply: {underlyings.shape}")
+            # logger.info(f"\nAfter apply strike is: \n{underlyings['strike']}")
 
             req_strikes = opt_df.merge(underlyings, how='inner', on=['underlying', 'expiry', 'strike'])
             req_strikes = req_strikes.drop(columns=['oi', 'current'])
@@ -238,7 +243,13 @@ class SnapAnalysis:
         # ATM calc
         # call_otm = oc_df['strike'] >= oc_df['spot_c']
         atm_df = oc_df.groupby(['underlying', 'expiry', 'spot_c'], as_index=False).agg({'strike': list})
+
+        logger.info(f"\nBefore apply: {atm_df.shape}")
+        logger.info(f"\nBefore apply implied atm is: \n{atm_df['implied_atm']}")
         atm_df['implied_atm'] = atm_df.apply(self.mround_strike, axis=1, price_col='spot_c')
+        logger.info(f"\nAfter apply: {atm_df.shape}")
+        logger.info(f"\nAfter apply implied atm is: \n{atm_df['implied_atm']}")
+        
         atm_df = atm_df[['underlying', 'expiry', 'implied_atm']].copy()
         oc_df = oc_df.merge(atm_df, on=['underlying', 'expiry'])  # map atm
         call_otm = oc_df['strike'] > oc_df['implied_atm']

@@ -6,8 +6,11 @@ from time import time
 
 import pandas as pd
 import requests
+import csv
 
-from common import logger, instruments_path, today, root_dir
+from common import logger, instruments_path, today, root_dir, data_dir, read_symbols
+from update_expiry import update_expiry
+from update_master import update_master
 
 renames = {'NIFTY 50': 'NIFTY', 'NIFTY BANK': 'BANKNIFTY', 'NIFTY IT': 'NIFTYIT',
            'NIFTY FINANCIAL SERVICES': 'FINNIFTY', 'NIFTY FIN SERVICE': 'FINNIFTY',
@@ -23,6 +26,7 @@ header_kite_contract = {
 
 }
 
+sym_df = pd.DataFrame()
 
 def get_raw_contracts():
     st = time()
@@ -64,8 +68,6 @@ def get_instruments(force=False):
 
 
 def get_req_contracts():
-    # scrips = ['NIFTY', 'BANKNIFTY']
-    # expiry = ['2023-12-13', '2023-12-14', '2023-12-28']
     ent_exp = entity_expiry()
     scrips = ent_exp.keys()
     ins = get_instruments()
@@ -83,9 +85,35 @@ def get_req_contracts():
 
 
 def entity_expiry():
-    symbols = pd.read_excel(os.path.join(root_dir, 'symbols.xlsx'))
+    # symbols = pd.read_excel(os.path.join(root_dir, 'symbols.xlsx'))
+    symbols = read_symbols
+    #master file check
+    master_path = os.path.join(data_dir, 'master.xlsx')
+    if os.path.isfile(master_path):
+        if datetime.fromtimestamp(os.path.getmtime(master_path)).date() < today.date():
+            update_result = update_master()
+            if update_result:
+                logger.info(f'xts master file updated in the database')
+            else:
+                logger.error('Failed to update xts master file in the database')
+    else:
+        update_result = update_master()
+        if update_result:
+            logger.info(f'xts master file created and updated in the database')
+        else:
+            logger.error('Failed to create and update xts master file in the database')
+
+    #symbol file(expiry) check
+    sym_df = update_expiry()
+    if not type(symbols['expiry'][0]) == type(pd.to_datetime(symbols['expiry'][0])):
+        symbols['expiry'] = pd.to_datetime(symbols['expiry'], dayfirst=True)
     if not symbols[symbols['expiry'] < today].empty:
-        raise ValueError('Expired contracts filled')
-    req = symbols.groupby(['symbol']).agg({'expiry': set})
+        sym_df = update_expiry()
+        if sym_df:
+            logger.info('\n expiry file updated')
+        else:
+            raise ValueError('Expired contracts filled')
+
+    req = sym_df.groupby(['symbol']).agg({'expiry': set})
     req['expiry'] = req['expiry'].apply(list)
     return req.to_dict('index')

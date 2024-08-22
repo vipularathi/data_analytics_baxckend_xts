@@ -57,7 +57,6 @@ class DataHandler:
 
             if self._kill is True:
                 break
-
         logger.debug(f'Data Processor Exit')
 
 

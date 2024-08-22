@@ -9,6 +9,7 @@ from kiteconnect import KiteTicker, KiteConnect
 
 from common import today, logger
 from data_handler import DataHandler, init_candle_creator
+from db_ops import DBHandler
 
 manual = False
 api_key = '8a6f62gf3y0ei7o9'
@@ -195,6 +196,12 @@ class ZerodhaWS:
                     # hist_fut = self.executor.submit(self.historical_etl_wrapper, kite_client=self.client, token_map=self.token_xref)
                     # logger.info(f'{self.name} Historical ETL status: {hist_fut.result()}')
                     # check_pids(source=self.name)
+                    #remove the rows from the db older than 1 month
+                    del_old_data = DBHandler.delete_old_data()
+                    if del_old_data:
+                        logger.info(f'Old data deleted successfully')
+                    else:
+                        logger.info(f'Failed to delete old data')
                     exit(30)
                 else:
                     sleep(30)

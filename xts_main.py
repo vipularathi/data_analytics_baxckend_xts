@@ -2,22 +2,22 @@ import json
 import multiprocessing as mp
 from concurrent.futures import ProcessPoolExecutor
 from time import sleep
-
+from tqdm import tqdm
 import numpy as np
 import requests
 import socketio
 from dateutil.relativedelta import relativedelta
 
-from common import today, logger
+from common import today, logger, xts_cred_dict, create_token, host, socket_url, subscription_url
 from data_handler import DataHandler, init_candle_creator
 from db_ops import DBHandler
 
 # from multiprocessing import Manager
 
 
-host = "https://algozy.rathi.com:3000"
-socket_url = "wss://algozy.rathi.com:3000"
-subscription_url = f'{host}/apimarketdata/instruments/subscription'
+# host = "https://algozy.rathi.com:3000"
+# socket_url = "wss://algozy.rathi.com:3000"
+# subscription_url = f'{host}/apimarketdata/instruments/subscription'
 
 
 # generate header
@@ -40,8 +40,9 @@ def test_token(token):
     if response.status_code == 200:
         logger.info("Token Not Expired")
     else:
-        logger.info("Token Expired")
-
+        progress_bar = tqdm(total=100, desc = 'Updating the access token', unit='%')
+        logger.info("Token Expired. Creating new token and updating in db...")
+        progress_bar.update(50)
     return response.status_code
 
 
@@ -134,20 +135,20 @@ def create_payload_oi(inst_id: list = None, exch_seg: list = None):
     return subscription_payload
 
 
-# create token
-def create_token(secretkey: str = "Tjdk062@i1", appkey: str = "880cf50aaa5e4d495c1405"):
-    url = f"{host}/apimarketdata/auth/login"
-    headers = {
-            "secretKey": secretkey,
-            "appKey": appkey,
-            "source": "WebAPI",
-    }
-    response = requests.post(url, json=headers)
-    response = response.json()
-    try:
-        return response["result"]["token"]
-    except:
-        return "Token not generated"
+# # create token
+# def create_token(secretkey: str = xts_cred_dict['secretkey'], appkey: str = xts_cred_dict['appkey']):
+#     url = f"{host}/apimarketdata/auth/login"
+#     headers = {
+#             "secretKey": secretkey,
+#             "appKey": appkey,
+#             "source": "WebAPI",
+#     }
+#     response = requests.post(url, json=headers)
+#     response = response.json()
+#     try:
+#         return response["result"]["token"]
+#     except:
+#         return "Token not generated"
 
 
 # subscription request
@@ -175,7 +176,12 @@ def get_token_header():
     # get credentials from DB
     res = DBHandler.get_credentials()
     if len(res) == 0:
-        raise RuntimeError('No XTS credentials available for connection')
+        # raise RuntimeError('No XTS credentials available for connection')
+        logger.info('No XTS credentials available for connection, hence creating a new token')
+        # new_token = create_token()
+        DBHandler.insert_credentials()
+        res = DBHandler.get_credentials()
+
     for i in range(len(res)):
 
         # add to dict
@@ -191,10 +197,11 @@ def get_token_header():
         token = cred['token']
 
         if test_token(token) == 400:
-
             # create new token & update in the DB - no need to test the new token
             token = create_token(cred['secretkey'], cred['appkey'])
             DBHandler.update_credentials(cred['appkey'], token)
+            progress_bar.close()
+            logger.info(f'New access token created and updated in db')
 
         else:
             logger.info("token test successful")
@@ -317,3 +324,7 @@ def xts_wrapper(*args, **kwargs):
 if __name__ == '__main__':
     pass
 
+# res = create_token()
+# print(res)
+# token, header, userid, choice = get_token_header()
+# print(f'token is {token}, header is {header}, userid is {userid}, choice is {choice}')
